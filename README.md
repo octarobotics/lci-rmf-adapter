@@ -95,7 +95,7 @@ Please edit `DOOR_NAME` in [test_client_door.sh](test_client_door.sh) for trial
 
 LCI does not only support the elevators (lifts) and the doors but also,
 - signals from alarm systems
-- automatic setting and releaseing of security systems
+- automatic setting and releasing of security systems
 - the exclusive control of resoruces among multiple robot systems (**LCI Sem**)
 - the messaging service between robots and humans (**LCI Bell**)
 
