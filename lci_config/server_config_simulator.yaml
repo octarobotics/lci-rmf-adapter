@@ -1,0 +1,86 @@
+# Copyright (c) 2024- Octa Robotics, Inc. All Rights Reserved.
+
+lci_mqtt_server: lci.octa8.link
+lci_bldg_id: simulator
+elevators:
+  - lci_bank_id: "3"
+    lci_elevator_id: "1"
+    lci_timeout_sec: 180
+    lci_floor_list:
+      - ["B5", True, False]
+      - ["B4", True, True]
+      - ["B3", True, False]
+      - ["B2", True, False]
+      - ["B1", True, False]
+      - ["0F", True, False]
+      - ["1F", True, False]
+      - ["2F", True, False]
+  - lci_bank_id: "1"
+    lci_elevator_id: "1"
+    lci_timeout_sec: 180
+    lci_floor_list:
+      - ["B1", True, False]
+      - "E"
+      - "G"
+      - "L"
+      - "1F"
+      - "2F"
+      - "3F"
+      - ["4F", True, False]
+      - "M5"
+      - "M6"
+      - ["8F", True, True]
+      - ["R", False, True]
+  - lci_bank_id: "2"
+    lci_elevator_id: "1"
+    lci_timeout_sec: 180
+    lci_floor_list:
+      - "B2"
+      - "B1"
+      - "1F"
+      - "2F"
+      - "3F"
+      - "4F"
+      - "5F"
+      - "6F"
+      - "7F"
+      - "8F"
+      - "9F"
+      - "10F"
+doors:
+  - lci_floor_id: "3F"
+    lci_door_id: "1"
+    lci_door_type: door
+    lci_timeout_sec: 60
+  - lci_floor_id: "3F"
+    lci_door_id: "2"
+    lci_door_type: door
+    lci_timeout_sec: 60
+  - lci_floor_id: "2F"
+    lci_door_id: "1"
+    lci_door_type: door
+    lci_timeout_sec: 60
+  - lci_floor_id: "7F"
+    lci_door_id: "1"
+    lci_door_type: flap
+    lci_timeout_sec: 60
+  - lci_floor_id: "7F"
+    lci_door_id: "2"
+    lci_door_type: lock
+    lci_timeout_sec: 60
+  - lci_floor_id: "1F"
+    lci_door_id: "1"
+    lci_door_type: door
+    lci_timeout_sec: 60
+  - lci_floor_id: "1F"
+    lci_door_id: "2"
+    lci_door_type: door
+    lci_timeout_sec: 60
+  - lci_floor_id: "2F"
+    lci_door_id: "2"
+    lci_door_type: door
+    lci_timeout_sec: 60
+  - lci_floor_id: "7F"
+    lci_door_id: "3"
+    lci_door_type: lock
+    lci_timeout_sec: 60

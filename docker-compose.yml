@@ -1,0 +1,31 @@
+# Copyright (c) 2024- Octa Robotics, Inc. All Rights Reserved.
+
+version: '3'
+networks: {}
+
+volumes:
+  lci_rmf_adapter_src:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: .
+
+services:
+  lci_rmf_adapter:
+    build:
+      context: .
+    image: lci_rmf_adapter
+    container_name: lci_rmf_adapter
+    privileged: true
+    tty: true
+    command: bash
+    restart: always
+    network_mode: host
+    tmpfs:
+      - /run
+      - /tmp
+    volumes:
+      - 'lci_rmf_adapter_src:/root/src'
+      - '/dev:/dev'
+

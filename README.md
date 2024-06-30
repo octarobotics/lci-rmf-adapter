@@ -1,2 +1,104 @@
-# lci-rmf-adapter
-RMF Lift and Door Adapter for LCI
+# lci_rmf_adapter (RMF Lift and Door Adapter for LCI)
+This package is an implementation of RMF Lift Adapter[^1] and Door Adapter[^2] for LCI.
+
+LCI is the cloud-based service provided by Octa Robotics, Inc[^3] .
+
+It supports,
+- Multiple vendors of elevators (lifts) including Mitsubishi, Hitachi, Toshiba, Fujitec, OTIS and more
+- Multiple vendors of doors and turnstiles including Nabco, Teraoka, Kumahira and more
+
+The base protocol of LCI is RFA[^4] on MQTT.
+
+This package bridges ROS2 (RMF Lift and Door Adapter) to LCI.
+
+
+[^1]: https://osrf.github.io/ros2multirobotbook/integration_lifts.html
+[^2]: https://osrf.github.io/ros2multirobotbook/integration_doors.html
+[^3]: https://www.octa8.jp/service/
+[^4]: RFA is the acronym of the Robot Friendly Asset Promotion Association of Japan. RFA publishes the standards for the interfaces between robots and elevators/doors. RFA standards are available for purchase from [their homepage](https://robot-friendly.org/publication/). English version is also available.
+
+
+# System requirements
+- ROS2 Humble
+- Python packages
+  - paho-mqtt < 2.0.0
+  - ruamel.yaml
+
+The more detail is exemplified in [Dockerfile](Dockerfile).
+
+
+# Topics
+| Message Types             | ROS2 Topic               | Description                                                              |
+| ------------------------- | ------------------------ | ------------------------------------------------------------------------ |
+| rmf_lift_msgs/LiftState   | `/lift_states`           | State of the lift published by the lift node                             |
+| rmf_lift_msgs/LiftRequest | `/adapter_lift_requests` | Requests to be sent to the lift supervisor to request operation of lifts |
+| rmf_door_msgs/DoorState   | `/door_states`           | State of the door published by the door node                             |
+| rmf_door_msgs/DoorRequest | `/adapter_door_requests` | Requests to be sent to the door supervisor to request operation of doors |
+
+## Limitation
+- `LiftRequest` shall be published when starting to use the lift at the origination floor and after when the robot has entered in the cage of the lift (twice in total). 
+- For both of `LiftRequest`, `LiftRequest.destination_floor` shall be set with the format of `"<origination>:<destination>"`. 
+- Door direction (front/rear) is not supported yet. The front doors are expected for all floors. It will be supported near future.
+
+
+# LCI files
+To configure lci_rmf_adapter, the following files are needed.
+
+- `server_config.yaml` : Config file to specify what elevators and doors are robot-ready.
+- Cert files: ClientID, client certificate and private key of an LCI Robot Account.
+
+All of them will be provided by Octa Robotics.
+
+[server_config_simulator.yaml](lci_config/server_config_simulator.yaml) is the config file for the simulator provided by Octa Robotics.
+
+Please contact lci@octa8.jp to obtain the LCI Robot Account for development, which is only allowed to access the simulator.
+
+
+# Docker
+To use lci_rmf_adapter quickly, it is recommended to use Docker.
+
+[container_manager.sh](container_manager.sh) provides an utility for Docker.
+
+- Edit `LCI_SERVER_CONFIG_YAML` and `LCI_CERT_DIR` in [start.sh](start.sh) to fit your environment.
+- `sudo ./container_manager.sh start`
+  - It will build and start the container.
+- `sudo ./container_manager.sh login`
+  - It will login you in the container environment.
+- `./start.sh`
+  - It will start the Node of lci_rmf_adapter.
+
+
+
+# Client examples
+## For Lift
+
+ROS2 Node example is found in [the test code for lift](lci_rmf_adapter/lci_rmf_adapter/lci_rmf_adapter_lift_test.py).
+
+Its entry point is [test_client_lift.sh](test_client_lift.sh)
+
+Please edit `LIFT_NAME`, `ORIGINATION` and `DESTINATION` in [test_client_lift.sh](test_client_lift.sh) for trial.
+
+`LIFT_NAME` is of the format `/lci/<bldg_id>/<bank_id>/<elevator_id>`.
+
+## For Door
+
+ROS2 Node example is found in [the test code for door](lci_rmf_adapter/lci_rmf_adapter/lci_rmf_adapter_door_test.py).
+
+Its entry point is [test_client_door.sh](test_client_door.sh)
+
+Please edit `DOOR_NAME` in [test_client_door.sh](test_client_door.sh) for trial
+
+`DOOR_NAME` is of the format `/lci/<bldg_id>/<floor_id>/<door_id>`.
+
+
+# Use LCI directly
+
+LCI does not only support the elevators (lifts) and the doors but also,
+- signals from alarm systems
+- automatic setting and releaseing of security systems
+- the exclusive control of resoruces among multiple robot systems (**LCI Sem**)
+- the messaging service between robots and humans (**LCI Bell**)
+
+To use full functionaly of LCI, please use MQTT.  
+
+[lci_client.py](lci_rmf_adapter/lci_rmf_adapter/lci_client.py) is an implementation of LCI client without ROS2.
