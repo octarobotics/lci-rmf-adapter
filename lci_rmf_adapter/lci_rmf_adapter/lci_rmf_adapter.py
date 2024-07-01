@@ -63,21 +63,36 @@ class RmfLiftContext(RmfContext):
     def __init__(self, lci_context: lci_client.LciElevatorContext, logger=None) -> None:
         super().__init__(lci_context, logger)
 
-        self._rmf_floor_list = [
-            x.floor_name for x in self._lci_context._floor_list]
+        # convolve door direction into floor_name
+        self._rmf_floor_list = []
+        for f in self._lci_context._floor_list:
+            if f.has_front_door:
+                self._rmf_floor_list.append(f.floor_name)
+            if f.has_rear_door:
+                self._rmf_floor_list.append(f'{f.floor_name}_r')
 
     def get_status(self) -> LiftState:
         lift_state = LiftState()
         lift_state.lift_name = self._lci_context._topic_prefix
         lift_state.available_floors = [
             x.floor_name for x in self._lci_context._floor_list]
-        lift_state.current_floor = self._lci_context._current_floor
-        lift_state.destination_floor = self._lci_context._target_floor
 
-        if self._lci_context._current_door in [1, 2]:
-            lift_state.door_state = LiftState.DOOR_OPEN
+        # encode door direction to floor_name
+        match self._lci_context._current_door:
+            case 1:  # Front door opened
+                lift_state.current_floor = self._lci_context._current_floor
+                lift_state.door_state = LiftState.DOOR_OPEN
+            case 2:  # Rear door opened
+                lift_state.current_floor = f'{self._lci_context._current_floor}_r'
+                lift_state.door_state = LiftState.DOOR_OPEN
+            case _:
+                lift_state.current_floor = self._lci_context._current_floor
+                lift_state.door_state = LiftState.DOOR_CLOSED
+
+        if self._lci_context._target_door == 2:
+            lift_state.destination_floor = f'{self._lci_context._target_floor}_r'
         else:
-            lift_state.door_state = LiftState.DOOR_CLOSED
+            lift_state.destination_floor = self._lci_context._target_floor
 
         if lift_state.current_floor == lift_state.destination_floor and lift_state.door_state == LiftState.DOOR_OPEN:
             lift_state.motion_state = LiftState.MOTION_STOPPED
@@ -288,8 +303,8 @@ class LciRmfAdapter(Node):
                     self.get_logger().info(
                         f'[{msg.lift_name}] Registration')
 
-                origination = target_floor_list[0]
-                destination = target_floor_list[1]
+                origination: str = target_floor_list[0]
+                destination: str = target_floor_list[1]
 
                 if rl_context._lci_context._target_floor == '':
                     # 1st CallElevator when the robot may be out of the cage.
@@ -305,9 +320,23 @@ class LciRmfAdapter(Node):
 
                     time.sleep(1)
 
+                # decode door direction from floor_name
+                if origination.endswith('_r'):
+                    origination_door = 2
+                    origination = origination[0:-2]
+                else:
+                    origination_door = 1
+
+                if destination.endswith('_r'):
+                    destination_door = 2
+                    destination = destination[0:-2]
+                else:
+                    destination_door = 1
+
                 res = self._lci_client.do_call_elevator(
                     rl_context._lci_context,
-                    origination, destination)
+                    origination, destination,
+                    origination_door, destination_door)
                 if not res:
                     self.get_logger().error(
                         f'[{msg.lift_name}] CallElevator failed')

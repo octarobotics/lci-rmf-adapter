@@ -38,7 +38,11 @@ The more detail is exemplified in [Dockerfile](Dockerfile).
 ## Limitation
 - `LiftRequest` shall be published when starting to use the lift at the origination floor and after when the robot has entered in the cage of the lift (twice in total). 
 - For both of `LiftRequest`, `LiftRequest.destination_floor` shall be set with the format of `"<origination>:<destination>"`. 
-- Door direction (front/rear) is not supported yet. The front doors are expected for all floors. It will be supported near future.
+- The suffix `_r` is used for the floor name to specify the rear door. This rule applies `<origination>`, `<destination>`, `LiftRequest.destination_floor` and `LiftRequest.current_floor`.
+
+For example, if the robot wants to use the lift from `B1` of the front door to `8F` of the rear door,
+- `LiftRequest.destination_floor` shall be `B1:8F_r`.
+- The arrival at the final destination can be detected by checking if `LiftRequest.current_floor` and `LiftRequest.door_state` are `8F_r` and `LiftState.DOOR_OPEN` respectively.
 
 
 # LCI files

@@ -5,6 +5,9 @@ LIFT_NAME="/lci/simulator/1/1"
 ORIGINATION="B1"
 DESTINATION="M5"
 
+# ORIGINATION="R_r"
+# DESTINATION="8F_r"
+
 #LOG_LEVEL=debug
 LOG_LEVEL=info
 
