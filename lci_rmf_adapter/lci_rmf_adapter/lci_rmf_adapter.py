@@ -279,12 +279,13 @@ class LciRmfAdapter(Node):
                     f'[{msg.lift_name}] Release')
 
             case LiftRequest.REQUEST_AGV_MODE:
-                # destination_floor must be '<origination>:<destination>' format string
+                # destination_floor shall be '<origination>:<destination>' format string especially for the backend lift API of LCI requires those information at the 1st CallElevator.
                 # If the robot want to move from '1F' to '3F', destination_floor is '1F:3F'
                 target_floor_list = msg.destination_floor.split(':')
-                if len(target_floor_list) != 2:
+
+                if len(target_floor_list) not in [1, 2]:
                     self.get_logger().error(
-                        f'[{msg.lift_name}] Format error of destination_floor ({msg.destination_floor}). It must be <origination>:<destination>')
+                        f'[{msg.lift_name}] Format error of destination_floor ({msg.destination_floor}). It must be <origination> for the 1st request, <destination> for the 2nd request or <origination>:<destination>')
                     return
 
                 for tf in target_floor_list:
@@ -303,35 +304,59 @@ class LciRmfAdapter(Node):
                     self.get_logger().info(
                         f'[{msg.lift_name}] Registration')
 
-                origination: str = target_floor_list[0]
-                destination: str = target_floor_list[1]
+                origination: str = None
+                destination: str = None
 
                 if rl_context._lci_context._target_floor == '':
                     # 1st CallElevator when the robot may be out of the cage.
-                    self.get_logger().info(
-                        f'[{msg.lift_name}] 1st CallElevator: {origination} to {destination}')
+
+                    if len(target_floor_list) == 2:
+                        origination = target_floor_list[0]
+                        destination = target_floor_list[1]
+                        self.get_logger().info(
+                            f'[{msg.lift_name}] 1st CallElevator: {origination} to {destination}')
+
+                    else:
+                        origination = target_floor_list[0]
+                        self.get_logger().info(
+                            f'[{msg.lift_name}] 1st CallElevator: {origination}')
+
                 else:
                     # 2nd CallElevator when the robot may be in the cage.
                     self._lci_client.do_robot_status(
                         rl_context._lci_context,
                         lci_client.RobotStatus.HAS_ENTERED)
-                    self.get_logger().info(
-                        f'[{msg.lift_name}] 2nd CallElevator: {origination} to {destination}')
+
+                    if len(target_floor_list) == 2:
+                        origination = target_floor_list[0]
+                        destination = target_floor_list[1]
+                        self.get_logger().info(
+                            f'[{msg.lift_name}] 2nd CallElevator: {origination} to {destination}')
+
+                    else:
+                        destination = target_floor_list[0]
+                        self.get_logger().info(
+                            f'[{msg.lift_name}] 2nd CallElevator: {destination}')
 
                     time.sleep(1)
 
-                # decode door direction from floor_name
-                if origination.endswith('_r'):
-                    origination_door = 2
-                    origination = origination[0:-2]
-                else:
-                    origination_door = 1
+                origination_door: int = None
+                destination_door: int = None
 
-                if destination.endswith('_r'):
-                    destination_door = 2
-                    destination = destination[0:-2]
-                else:
-                    destination_door = 1
+                # decode door direction from floor_name
+                if origination is not None:
+                    if origination.endswith('_r'):
+                        origination_door = 2
+                        origination = origination[0:-2]
+                    else:
+                        origination_door = 1
+
+                if destination is not None:
+                    if destination.endswith('_r'):
+                        destination_door = 2
+                        destination = destination[0:-2]
+                    else:
+                        destination_door = 1
 
                 res = self._lci_client.do_call_elevator(
                     rl_context._lci_context,

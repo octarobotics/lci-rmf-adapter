@@ -36,8 +36,10 @@ The more detail is exemplified in [Dockerfile](Dockerfile).
 | rmf_door_msgs/DoorRequest | `/adapter_door_requests` | Requests to be sent to the door supervisor to request operation of doors |
 
 ## Limitation
-- `LiftRequest` shall be published when starting to use the lift at the origination floor and after when the robot has entered in the cage of the lift (twice in total). 
-- For both of `LiftRequest`, `LiftRequest.destination_floor` shall be set with the format of `"<origination>:<destination>"`. 
+- `LiftRequest` shall be published when starting to use the lift at the origination floor and after the robot entered the car of the lift (twice in total). 
+- When the robot is at the origination floor, `LiftRequest.destination_floor` shall be `"<origination>"`.
+- After the robot entered the car, `LiftRequest.destination_floor` shall be `"<destination>"`.
+- For both of `LiftRequest`, `LiftRequest.destination_floor` can be set with the format of `"<origination>:<destination>"`. **This format is required especially when the backend lift API of LCI requires both `"<origination>"` and `"<destination>"` at the first request.**
 - The suffix `_r` is used for the floor name to specify the rear door. This rule applies `<origination>`, `<destination>`, `LiftRequest.destination_floor` and `LiftRequest.current_floor`.
 
 For example, if the robot wants to use the lift from `B1` of the front door to `8F` of the rear door,
