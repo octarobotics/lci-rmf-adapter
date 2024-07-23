@@ -22,7 +22,8 @@ setup(
         'console_scripts': [
             'lci_rmf_adapter = lci_rmf_adapter.lci_rmf_adapter:main',
             'lci_rmf_adapter_lift_test = lci_rmf_adapter.lci_rmf_adapter_lift_test:main',
-            'lci_rmf_adapter_door_test = lci_rmf_adapter.lci_rmf_adapter_door_test:main',            
+            'lci_rmf_adapter_lift_test_single_destination = lci_rmf_adapter.lci_rmf_adapter_lift_test_single_destination:main',
+            'lci_rmf_adapter_door_test = lci_rmf_adapter.lci_rmf_adapter_door_test:main',
         ],
     },
 )

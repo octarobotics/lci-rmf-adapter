@@ -15,7 +15,7 @@ RUN git clone https://github.com/open-rmf/rmf_internal_msgs.git
 RUN . /opt/ros/humble/setup.sh && colcon build --symlink-install --packages-select rmf_lift_msgs rmf_door_msgs
 
 
-COPY start.sh test_client_lift.sh test_client_door.sh ./
+COPY start.sh test_client_*.sh ./
 RUN chmod 755 *.sh
 
 CMD ["/bin/bash"]

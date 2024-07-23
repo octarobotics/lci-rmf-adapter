@@ -492,13 +492,20 @@ class LciClient:
             context._target_floor = destination
             context._target_door = destination_door
 
-        payload = {
-            'origination': origination,
-            'destination': destination,
-            'origination_door': origination_door,
-            'destination_door': destination_door,
-            'direction': direction,
-        }
+        payload = {'direction': direction}
+
+        if origination is not None:
+            payload.update({
+                'origination': origination,
+                'origination_door': origination_door
+            })
+
+        if destination is not None:
+            payload.update({
+                'destination': destination,
+                'destination_door': destination_door
+            })
+
         return self._publish(context, 'CallElevator', payload, 180)
 
     def do_request_elevator_status(self, context: LciElevatorContext) -> bool:
