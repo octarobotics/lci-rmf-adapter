@@ -24,15 +24,20 @@ class RmfContext(ABC):
     _occupant_id: str
     _lock: threading.Lock
 
+    # buffer to neglect mutiple same LiftRequest
+    _destination_floor: str
+
     def __init__(self, lci_context: lci_client.LciContext, logger=None) -> None:
         self._logger = logger
 
         self._lci_context = lci_context
-        self._lci_context.reset_callback = self.reset_occupant
+        self._lci_context.reset_callback = self.reset
 
         self._is_occupied = False
         self._occupant_id = ''
         self._lock = threading.Lock()
+
+        self._destination_floor = ''
 
     def set_occupant(self, occupant_id: str) -> bool:
         with self._lock:
@@ -43,13 +48,21 @@ class RmfContext(ABC):
             self._occupant_id = occupant_id
             return True
 
-    def reset_occupant(self) -> None:
+    def reset(self) -> None:
         with self._lock:
             self._is_occupied = False
             self._occupant_id = ''
+            self._destination_floor = ''
 
     def get_occupant(self) -> str:
         return self._occupant_id
+
+    def set_destination_floor(self, destination_floor: str) -> None:
+        with self._lock:
+            self._destination_floor = destination_floor
+
+    def get_destination_floor(self) -> str:
+        return self._destination_floor
 
     @abstractmethod
     def get_status(self) -> LiftState | DoorState:
@@ -279,8 +292,24 @@ class LciRmfAdapter(Node):
                     f'[{msg.lift_name}] Release')
 
             case LiftRequest.REQUEST_AGV_MODE:
-                # destination_floor shall be '<origination>:<destination>' format string especially for the backend lift API of LCI requires those information at the 1st CallElevator.
-                # If the robot want to move from '1F' to '3F', destination_floor is '1F:3F'
+                """
+                When the robot is at the lift hall, LiftRequest.destination_floor shall be set in '<origination>' or '<origination>:<destination>'.
+                Especially when the backend lift API behind LCI requires <destination> information, '<origination>:<destination>' format is mandatory for the 1st CallElevator.
+
+                After the robot entered the cage, LiftRequest.destination_floor shall be set in '<destination>' or '<destination>:<destination>'.
+
+                Example 1:
+                - At the lift hall: '1F'
+                - In the cage: '3F'
+
+                Example 2:
+                - At the lift hall: '1F:3F'
+                - In the cage: '3F'
+
+                Example 3:
+                - At the lift hall: '1F:3F'
+                - In the cage: '3F:3F'
+                """
                 target_floor_list = msg.destination_floor.split(':')
 
                 if len(target_floor_list) not in [1, 2]:
@@ -293,6 +322,11 @@ class LciRmfAdapter(Node):
                         self.get_logger().error(
                             f'[{msg.lift_name}] Invalid floor name {tf}. It is not in floor_list)')
                         return
+
+                if rl_context.get_destination_floor() == msg.destination_floor:
+                    # Because RMF sends same LiftRequest in 1 Hz, lci-rmf-adapter has to neglect those redundant requests by checking whether LiftRequest.destination_floor changes.
+                    return
+                rl_context.set_destination_floor(msg.destination_floor)
 
                 if not rl_context._lci_context._is_registered:
                     res = self._lci_client.do_registration(
@@ -323,20 +357,18 @@ class LciRmfAdapter(Node):
 
                 else:
                     # 2nd CallElevator when the robot may be in the cage.
+
                     self._lci_client.do_robot_status(
                         rl_context._lci_context,
                         lci_client.RobotStatus.HAS_ENTERED)
 
                     if len(target_floor_list) == 2:
-                        origination = target_floor_list[0]
                         destination = target_floor_list[1]
-                        self.get_logger().info(
-                            f'[{msg.lift_name}] 2nd CallElevator: {origination} to {destination}')
-
                     else:
                         destination = target_floor_list[0]
-                        self.get_logger().info(
-                            f'[{msg.lift_name}] 2nd CallElevator: {destination}')
+
+                    self.get_logger().info(
+                        f'[{msg.lift_name}] 2nd CallElevator: {destination}')
 
                     time.sleep(1)
 
@@ -382,7 +414,7 @@ class LciRmfAdapter(Node):
             time.sleep(1)
 
         self._lci_client.do_release(rl_context._lci_context)
-        rl_context.reset_occupant()
+        rl_context.reset()
 
     def _door_request_callback(self, msg: DoorRequest) -> None:
         rd_context = self._door_context_dict.get(msg.door_name, None)
@@ -424,7 +456,7 @@ class LciRmfAdapter(Node):
 
     def reset_door(self, rd_context: RmfDoorContext):
         self._lci_client.do_release(rd_context._lci_context)
-        rd_context.reset_occupant()
+        rd_context.reset()
 
 
 def main(args=None):
