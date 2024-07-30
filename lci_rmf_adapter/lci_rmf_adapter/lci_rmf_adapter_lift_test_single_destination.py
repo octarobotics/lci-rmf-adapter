@@ -125,6 +125,11 @@ class LciRmfAdapterLiftTest(Node):
                         f'[{self._lift_name}] [CarCall] {self._destination}')
                     self.request_lift(self._destination)
                     self._use_state = LiftUseState.WAIT_FOR_ARRIVAL_TO_DESTINATION
+                else:
+                    # to mimic RMF repeating LiftRequest
+                    self.get_logger().info(
+                        f'[{self._lift_name}] [CarCall] {self._origination}')
+                    self.request_lift(self._origination)
 
             case LiftUseState.WAIT_FOR_ARRIVAL_TO_DESTINATION:
                 if self.is_arrived(self._destination):
@@ -138,6 +143,11 @@ class LciRmfAdapterLiftTest(Node):
 
                     self.release_lift()
                     raise SystemExit
+                else:
+                    # to mimic RMF repeating LiftRequest
+                    self.get_logger().info(
+                        f'[{self._lift_name}] [CarCall] {self._destination}')
+                    self.request_lift(self._destination)
 
 
 def main(args=None):

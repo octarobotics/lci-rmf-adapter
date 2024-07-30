@@ -76,14 +76,13 @@ class LciRmfAdapterLiftTest(Node):
         with self._lift_state_lock:
             self._lift_state = msg
 
-    def request_lift(self):
+    def request_lift(self, destination_floor: str):
         msg = LiftRequest()
         msg.lift_name = self._lift_name
         msg.request_time = self.get_clock().now().to_msg()
         msg.session_id = self.get_name()
         msg.request_type = LiftRequest.REQUEST_AGV_MODE
-        msg.destination_floor = f'{self._origination}:{self._destination}'
-
+        msg.destination_floor = destination_floor
         self._lift_request_pub.publish(msg)
 
     def release_lift(self):
@@ -112,7 +111,7 @@ class LciRmfAdapterLiftTest(Node):
 
                 self.get_logger().info(
                     f'[{self._lift_name}] [CarCall] {self._origination}')
-                self.request_lift()
+                self.request_lift(f'{self._origination}:{self._destination}')
                 self._use_state = LiftUseState.WAIT_FOR_ARRIVAL_TO_ORIGINATION
 
             case LiftUseState.WAIT_FOR_ARRIVAL_TO_ORIGINATION:
@@ -124,8 +123,15 @@ class LciRmfAdapterLiftTest(Node):
 
                     self.get_logger().info(
                         f'[{self._lift_name}] [CarCall] {self._destination}')
-                    self.request_lift()
+                    self.request_lift(
+                        f'{self._destination}:{self._destination}')
                     self._use_state = LiftUseState.WAIT_FOR_ARRIVAL_TO_DESTINATION
+                else:
+                    # to mimic RMF repeating LiftRequest
+                    self.get_logger().info(
+                        f'[{self._lift_name}] [CarCall] {self._origination}')
+                    self.request_lift(
+                        f'{self._origination}:{self._destination}')
 
             case LiftUseState.WAIT_FOR_ARRIVAL_TO_DESTINATION:
                 if self.is_arrived(self._destination):
@@ -139,6 +145,12 @@ class LciRmfAdapterLiftTest(Node):
 
                     self.release_lift()
                     raise SystemExit
+                else:
+                    # to mimic RMF repeating LiftRequest
+                    self.get_logger().info(
+                        f'[{self._lift_name}] [CarCall] {self._destination}')
+                    self.request_lift(
+                        f'{self._destination}:{self._destination}')
 
 
 def main(args=None):
