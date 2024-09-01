@@ -162,7 +162,7 @@ class LciElevatorContext(LciContext):
         self._is_registered = False
         self._is_robot_in_the_car = False
 
-        self._topic_prefix = f'/lci/{self._bldg_id}/{self._bank_id}/{self._elevator_id}'
+        self._topic_prefix = f'/lci/{self._bldg_id}/{self._bank_id}/{self._elevator_id}'  # noqa
 
         self._current_floor = self._floor_list[0].floor_name
         self._current_door = 0
@@ -243,7 +243,7 @@ class LciDoorContext(LciContext):
         if ret == False:
             return False
 
-        self._topic_prefix = f'/lci/{self._bldg_id}/{self._floor_id}/{self._door_id}'
+        self._topic_prefix = f'/lci/{self._bldg_id}/{self._floor_id}/{self._door_id}'  # noqa
 
         self._is_registered = False
 
@@ -456,13 +456,43 @@ class LciClient:
 
         if need_to_sync:
             context._response_event.clear()
+            qos = 1
+        else:
+            qos = 0
 
         with self._publish_lock:
-            self._mqtt_client.publish(topic, json_payload, qos=1)
+            pub_info = self._mqtt_client.publish(topic, json_payload, qos=qos)
 
-        self._logger.debug(f'[LCI] Published: {topic}, {json_payload}')
         if need_to_sync:
-            return context._response_event.wait(timeout_sec)
+            # Wait for completion of publish()
+            start_time = time.time()
+            while True:
+                try:
+                    # When the state is disconnection, wait_for_publish() will return soon with Exception
+                    pub_info.wait_for_publish(timeout=0.2)
+
+                except Exception:
+                    time.sleep(0.2)
+                    continue
+
+                if pub_info.is_published():
+                    # Elapsed time between PUB and PUBACK
+                    self._logger.debug(f'[LCI] Published ({time.time()-start_time:.03f}): {topic}, {json_payload}')  # noqa
+
+                    # Wait for receiving response from LCI
+                    start_time = time.time()
+                    ret = context._response_event.wait(timeout_sec)
+                    if ret:
+                        # Elapsed time between LCI's request and response
+                        self._logger.debug(f'[LCI] Response received ({time.time()-start_time:.03f}): {api}')  # noqa
+                    else:
+                        self._logger.debug(f'[LCI] Response timeout ({time.time()-start_time:.03f}): {api}')  # noqa
+
+                    return ret
+
+                elif start_time + timeout_sec < time.time():
+                    self._logger.debug(f'[LCI] Publish timeout ({time.time()-start_time:.03f}): {topic}, {json_payload}')  # noqa
+                    return False
 
         return True
 
