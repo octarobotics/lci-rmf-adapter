@@ -96,14 +96,14 @@ class RmfLiftContext(RmfContext):
                 lift_state.current_floor = self._lci_context._current_floor
                 lift_state.door_state = LiftState.DOOR_OPEN
             case 2:  # Rear door opened
-                lift_state.current_floor = f'{self._lci_context._current_floor}_r'
+                lift_state.current_floor = f'{self._lci_context._current_floor}_r'  # noqa
                 lift_state.door_state = LiftState.DOOR_OPEN
             case _:
                 lift_state.current_floor = self._lci_context._current_floor
                 lift_state.door_state = LiftState.DOOR_CLOSED
 
         if self._lci_context._target_door == 2:
-            lift_state.destination_floor = f'{self._lci_context._target_floor}_r'
+            lift_state.destination_floor = f'{self._lci_context._target_floor}_r'  # noqa
         else:
             lift_state.destination_floor = self._lci_context._target_floor
 
@@ -358,9 +358,17 @@ class LciRmfAdapter(Node):
                 else:
                     # 2nd CallElevator when the robot may be in the cage.
 
-                    self._lci_client.do_robot_status(
+                    res = self._lci_client.do_robot_status(
                         rl_context._lci_context,
                         lci_client.RobotStatus.HAS_ENTERED)
+
+                    if not res:
+                        self.get_logger().error(
+                            f'[{msg.lift_name}] RobotStatus failed')
+                        self.reset_lift(rl_context)
+                        self.get_logger().info(
+                            f'[{msg.lift_name}] Release')
+                        return
 
                     if len(target_floor_list) == 2:
                         destination = target_floor_list[1]
@@ -369,8 +377,6 @@ class LciRmfAdapter(Node):
 
                     self.get_logger().info(
                         f'[{msg.lift_name}] 2nd CallElevator: {destination}')
-
-                    time.sleep(1)
 
                 origination_door: int = None
                 destination_door: int = None
@@ -408,12 +414,14 @@ class LciRmfAdapter(Node):
     def reset_lift(self, rl_context: RmfLiftContext):
         if rl_context._lci_context._is_registered:
             # RMF Lift API does not have information where the robot is. Then, HAS_GOT_OFF used for LCI to reset.
+            # For resetting, no need to receive the corresponding response from LCI
             self._lci_client.do_robot_status(
                 rl_context._lci_context,
-                lci_client.RobotStatus.HAS_GOT_OFF)
+                lci_client.RobotStatus.HAS_GOT_OFF, False)
             time.sleep(1)
 
-        self._lci_client.do_release(rl_context._lci_context)
+        # For resetting, no need to receive the corresponding response from LCI
+        self._lci_client.do_release(rl_context._lci_context, False)
         rl_context.reset()
 
     def _door_request_callback(self, msg: DoorRequest) -> None:
@@ -455,7 +463,8 @@ class LciRmfAdapter(Node):
                 self.get_logger().info(f'[{msg.door_name}] OpenDoor')
 
     def reset_door(self, rd_context: RmfDoorContext):
-        self._lci_client.do_release(rd_context._lci_context)
+        # For resetting, no need to receive the corresponding response from LCI
+        self._lci_client.do_release(rd_context._lci_context, False)
         rd_context.reset()
 
 

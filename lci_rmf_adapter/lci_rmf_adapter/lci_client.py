@@ -443,7 +443,7 @@ class LciClient:
             self._logger.warning(
                 f'[LCI] No relevant context for {topic}, {payload_kv}')
 
-    def _publish(self, context: LciContext, api: str, payload: dict, timeout_sec: float = 0) -> bool:
+    def _publish(self, context: LciContext, api: str, payload: dict, timeout_sec: float = 0, wait_response: bool = True) -> bool:
         topic = f'{context._topic_prefix}/{api}/{self._robot_id}'
         payload.update({
             'robot_id': self._robot_id,
@@ -479,16 +479,18 @@ class LciClient:
                     # Elapsed time between PUB and PUBACK
                     self._logger.debug(f'[LCI] Published ({time.time()-start_time:.03f}): {topic}, {json_payload}')  # noqa
 
-                    # Wait for receiving response from LCI
-                    start_time = time.time()
-                    ret = context._response_event.wait(timeout_sec)
-                    if ret:
-                        # Elapsed time between LCI's request and response
-                        self._logger.debug(f'[LCI] Response received ({time.time()-start_time:.03f}): {api}')  # noqa
+                    if wait_response:
+                        # Wait for receiving response from LCI
+                        start_time = time.time()
+                        ret = context._response_event.wait(timeout_sec)
+                        if ret:
+                            # Elapsed time between LCI's request and response
+                            self._logger.debug(f'[LCI] Response received ({time.time()-start_time:.03f}): {api}')  # noqa
+                        else:
+                            self._logger.debug(f'[LCI] Response timeout ({time.time()-start_time:.03f}): {api}')  # noqa
+                        return ret
                     else:
-                        self._logger.debug(f'[LCI] Response timeout ({time.time()-start_time:.03f}): {api}')  # noqa
-
-                    return ret
+                        return True
 
                 elif start_time + timeout_sec < time.time():
                     self._logger.debug(f'[LCI] Publish timeout ({time.time()-start_time:.03f}): {topic}, {json_payload}')  # noqa
@@ -504,11 +506,11 @@ class LciClient:
 
         return self._publish(context, 'Registration', payload, 180)
 
-    def do_release(self, context: LciContext) -> bool:
-        return self._publish(context, 'Release', {}, 20)
+    def do_release(self, context: LciContext, wait_response: bool = True) -> bool:
+        return self._publish(context, 'Release', {}, 20, wait_response)
 
-    def do_robot_status(self, context: LciContext, robot_status: RobotStatus) -> bool:
-        return self._publish(context, 'RobotStatus', {'state': robot_status.value}, 20)
+    def do_robot_status(self, context: LciContext, robot_status: RobotStatus, wait_response: bool = True) -> bool:
+        return self._publish(context, 'RobotStatus', {'state': robot_status.value}, 20, wait_response)
 
     def do_call_elevator(self, context: LciElevatorContext,
                          origination: str, destination: str,
@@ -548,7 +550,7 @@ class LciClient:
             return self._publish(context, 'OpenDoor', {}, 20)
 
     def do_request_door_status(self, context: LciDoorContext) -> bool:
-        return self._publish(context, 'RequestDoorStatus', {}, 20)
+        return self._publish(context, 'RequestDoorStatus', {})
 
 
 # Main routine
