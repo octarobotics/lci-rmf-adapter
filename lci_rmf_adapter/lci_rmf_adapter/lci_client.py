@@ -458,7 +458,7 @@ class LciClient:
             context._response_event.clear()
 
         with self._publish_lock:
-            self._mqtt_client.publish(topic, json_payload)
+            self._mqtt_client.publish(topic, json_payload, qos=1)
 
         self._logger.debug(f'[LCI] Published: {topic}, {json_payload}')
         if need_to_sync:
