@@ -21,7 +21,7 @@ This package bridges ROS2 (RMF Lift and Door Adapter) to LCI.
 # System requirements
 - ROS2 Humble
 - Python packages
-  - paho-mqtt < 2.0.0
+  - paho-mqtt == 1.6.1
   - ruamel.yaml
 
 The more detail is exemplified in [Dockerfile](Dockerfile).
@@ -111,6 +111,6 @@ LCI does not only support the elevators (lifts) and the doors but also,
 - the exclusive control of resoruces among multiple robot systems (**LCI Sem**)
 - the messaging service between robots and humans (**LCI Bell**)
 
-To use full functionaly of LCI, please use MQTT.  
+To use full functionaly of LCI, please use MQTT.
 
 [lci_client.py](lci_rmf_adapter/lci_rmf_adapter/lci_client.py) is an implementation of LCI client without ROS2.
