@@ -5,7 +5,7 @@ FROM osrf/ros:humble-desktop
 WORKDIR /root
 
 RUN apt update && apt install -y python3-pip
-RUN pip install "paho-mqtt<2.0.0" 
+RUN pip install "paho-mqtt==1.6.1"
 RUN pip install ruamel.yaml
 
 
