@@ -550,7 +550,7 @@ class LciClient:
 
     def do_open_door(self, context: LciDoorContext, direction: int = None) -> bool:
         if context._device_type == 'flap' and direction is not None:
-            return self._publish(context, 'OpenDoor', {'direciton': direction}, 20)
+            return self._publish(context, 'OpenDoor', {'direction': direction}, 20)
         else:
             return self._publish(context, 'OpenDoor', {}, 20)
 
