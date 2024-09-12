@@ -526,6 +526,11 @@ class LciClient:
 
         payload = {'direction': direction}
 
+        if origination == destination:
+            self._logger.error(
+                f'[LCI] Same values {origination} are given for origination and destination, ignoring request.')
+            return False
+
         if origination is not None:
             payload.update({
                 'origination': origination,
