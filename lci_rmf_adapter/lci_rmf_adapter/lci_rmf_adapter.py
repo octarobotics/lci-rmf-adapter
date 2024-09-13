@@ -312,10 +312,18 @@ class LciRmfAdapter(Node):
                 """
                 target_floor_list = msg.destination_floor.split(':')
 
-                if len(target_floor_list) not in [1, 2]:
-                    self.get_logger().error(
-                        f'[{msg.lift_name}] Format error of destination_floor ({msg.destination_floor}). It must be <origination> for the 1st request, <destination> for the 2nd request or <origination>:<destination>')
-                    return
+                match len(target_floor_list):
+                    case 1:
+                        pass
+                    case 2:
+                        if target_floor_list[0] == target_floor_list[1]:
+                            self.get_logger().error(
+                                f'[{msg.lift_name}] Format error of destination_floor ({msg.destination_floor}). <origination> and <destination> indicated the same floor.')
+                            return
+                    case _:
+                        self.get_logger().error(
+                            f'[{msg.lift_name}] Format error of destination_floor ({msg.destination_floor}). It must be <origination> for the 1st request, <destination> for the 2nd request or <origination>:<destination>.')
+                        return
 
                 for tf in target_floor_list:
                     if tf not in rl_context._rmf_floor_list:
