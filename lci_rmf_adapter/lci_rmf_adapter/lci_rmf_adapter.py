@@ -102,6 +102,11 @@ class RmfLiftContext(RmfContext):
                 lift_state.current_floor = self._lci_context._current_floor
                 lift_state.door_state = LiftState.DOOR_CLOSED
 
+        if not self._lci_context._is_registered:
+            # door_state must be masked as DOOR_CLOSED
+            # because _lci_context._current_door is not updated when it is not registered
+            lift_state.door_state = LiftState.DOOR_CLOSED
+
         if self._lci_context._target_door == 2:
             lift_state.destination_floor = f'{self._lci_context._target_floor}_r'  # noqa
         else:
@@ -142,6 +147,11 @@ class RmfDoorContext(RmfContext):
             door_state.current_mode = DoorMode(value=DoorMode.MODE_CLOSED)
         else:
             door_state.current_mode = DoorMode(value=DoorMode.MODE_OPEN)
+
+        if not self._lci_context._is_registered:
+            # current_mode must be masked as MODE_CLOSED
+            # because _lci_context._current_door is not updated when it is not registered
+            door_state.current_mode = DoorMode(value=DoorMode.MODE_CLOSED)
 
         # door_state.current_mode will be overwritten with DoorMode.MODE_OFFLINE if _lci_client is not connected.
         # door_state.door_time shall be set with rclpy.Time

@@ -175,6 +175,11 @@ class LciElevatorContext(LciContext):
         with self._context_lock:
             self._is_registered = False
             self._is_robot_in_the_car = False
+
+            # Set the door status closed for robots to refrain entering because ElevatorStatus is only updated during registered.
+            # self._current_floor = self._floor_list[0].floor_name
+            self._current_door = 0
+
             self._target_floor = ''
             self._target_door = 0
 
@@ -203,7 +208,7 @@ class LciElevatorContext(LciContext):
 
                 case _:
                     self._is_available = True
-                    self._is_registered = False
+                    self.reset()
 
 
 class LciDoorContext(LciContext):
@@ -273,6 +278,8 @@ class LciDoorContext(LciContext):
                             self._current_lock = payload.get('lock', 1)
                         else:
                             self._current_door = payload.get('door', 0)
+            else:
+                self.reset()
 
 
 class LciClient:
