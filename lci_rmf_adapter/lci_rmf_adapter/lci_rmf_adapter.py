@@ -316,7 +316,7 @@ class LciRmfAdapter(Node):
                     case 1:
                         pass
                     case 2:
-                        if target_floor_list[0] == target_floor_list[1]:
+                        if not rl_context._lci_context._is_registered and target_floor_list[0] == target_floor_list[1]:
                             self.get_logger().error(
                                 f'[{msg.lift_name}] Format error of destination_floor ({msg.destination_floor}). <origination> and <destination> indicated the same floor.')
                             return

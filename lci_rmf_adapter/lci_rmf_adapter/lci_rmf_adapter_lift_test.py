@@ -124,7 +124,7 @@ class LciRmfAdapterLiftTest(Node):
                     self.get_logger().info(
                         f'[{self._lift_name}] [CarCall] {self._destination}')
                     self.request_lift(
-                        f'{self._destination}')
+                        f'{self._destination}:{self._destination}')
                     self._use_state = LiftUseState.WAIT_FOR_ARRIVAL_TO_DESTINATION
                 else:
                     # to mimic RMF repeating LiftRequest
@@ -150,7 +150,7 @@ class LciRmfAdapterLiftTest(Node):
                     self.get_logger().info(
                         f'[{self._lift_name}] [CarCall] {self._destination}')
                     self.request_lift(
-                        f'{self._destination}')
+                        f'{self._destination}:{self._destination}')
 
 
 def main(args=None):
