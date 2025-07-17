@@ -7,6 +7,7 @@ WORKDIR /root
 RUN apt update && apt install -y python3-pip
 RUN pip install "paho-mqtt==1.6.1"
 RUN pip install ruamel.yaml
+RUN pip install packaging
 
 
 RUN git clone https://github.com/open-rmf/rmf_internal_msgs.git

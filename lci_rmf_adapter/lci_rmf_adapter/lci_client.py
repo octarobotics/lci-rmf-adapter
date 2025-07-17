@@ -1,5 +1,8 @@
 # Copyright (c) 2024- Octa Robotics, Inc. All Rights Reserved.
 
+from importlib.metadata import version
+from packaging.version import parse
+import paho.mqtt
 import paho.mqtt.client as mqtt
 import time
 import ruamel.yaml
@@ -345,8 +348,16 @@ class LciClient:
                     self._context_dict.update({context._topic_prefix: context})
 
         try:
-            self._mqtt_client = mqtt.Client(
-                protocol=mqtt.MQTTv311, userdata=self)
+            v2_0_0 = parse('2.0.0')
+            paho_version = parse(paho.mqtt.__version__)
+
+            if v2_0_0 <= paho_version:
+                self._mqtt_client = mqtt.Client(
+                    mqtt.CallbackAPIVersion.VERSION1,
+                    protocol=mqtt.MQTTv311, userdata=self)
+            else:
+                self._mqtt_client = mqtt.Client(
+                    protocol=mqtt.MQTTv311, userdata=self)
 
             # Default client_id. It is needed for on-premise version
             self._robot_id = f'_DUMMYID'
