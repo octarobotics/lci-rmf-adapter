@@ -10,7 +10,7 @@ from rclpy.publisher import Publisher
 
 from . import lci_client
 import threading
-from typing import Any
+from typing import Any, Optional
 from abc import ABC, abstractmethod
 import time
 
@@ -195,13 +195,12 @@ class LciRmfAdapter(Node):
         self._door_context_dict = {}
 
         for name, l_context in lci_context_dict.items():
-            match l_context.get_device_type():
-                case lci_client.DeviceType.ELEVATOR:
-                    self._lift_context_dict.update(
-                        {name: RmfLiftContext(l_context, self.get_logger())})
-                case lci_client.DeviceType.DOOR:
-                    self._door_context_dict.update(
-                        {name: RmfDoorContext(l_context, self.get_logger())})
+            if isinstance(l_context, lci_client.LciElevatorContext):
+                self._lift_context_dict.update(
+                    {name: RmfLiftContext(l_context, self.get_logger())})
+            elif isinstance(l_context, lci_client.LciDoorContext):
+                self._door_context_dict.update(
+                    {name: RmfDoorContext(l_context, self.get_logger())})
 
         self._lci_client.start()
 
@@ -344,9 +343,16 @@ class LciRmfAdapter(Node):
                 if rl_context.get_destination_floor() == msg.destination_floor:
                     # Because RMF sends same LiftRequest in 1 Hz, lci-rmf-adapter has to neglect those redundant requests by checking whether LiftRequest.destination_floor changes.
                     return
-                rl_context.set_destination_floor(msg.destination_floor)
 
                 if not rl_context._lci_context._is_registered:
+
+                    if rl_context._lci_context.in_deadtime():
+                        self.get_logger().error(
+                            f'[{msg.lift_name}] LiftRequest was rejected due to deadtime after resetting of LCI or the lift.')
+                        return
+
+                    rl_context.set_destination_floor(msg.destination_floor)
+
                     res = self._lci_client.do_registration(
                         rl_context._lci_context)
                     if not res or not rl_context._lci_context._is_registered:
@@ -356,8 +362,11 @@ class LciRmfAdapter(Node):
                     self.get_logger().info(
                         f'[{msg.lift_name}] Registration')
 
-                origination: str = None
-                destination: str = None
+                else:
+                    rl_context.set_destination_floor(msg.destination_floor)
+
+                origination: Optional[str] = None
+                destination: Optional[str] = None
 
                 if rl_context._lci_context._target_floor == '':
                     # 1st CallElevator when the robot may be out of the cage.
@@ -396,8 +405,8 @@ class LciRmfAdapter(Node):
                     self.get_logger().info(
                         f'[{msg.lift_name}] 2nd CallElevator: {destination}')
 
-                origination_door: int = None
-                destination_door: int = None
+                origination_door: Optional[int] = None
+                destination_door: Optional[int] = None
 
                 # decode door direction from floor_name
                 if origination is not None:
@@ -463,6 +472,12 @@ class LciRmfAdapter(Node):
 
             case DoorMode.MODE_OPEN:
                 if not rd_context._lci_context._is_registered:
+
+                    if rd_context._lci_context.in_deadtime():
+                        self.get_logger().error(
+                            f'[{msg.door_name}] DoorRequest was rejected due to deadtime after resetting of LCI or the door.')
+                        return
+
                     res = self._lci_client.do_registration(
                         rd_context._lci_context)
                     if not res or not rd_context._lci_context._is_registered:

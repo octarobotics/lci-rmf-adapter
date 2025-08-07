@@ -1,11 +1,11 @@
 # Copyright (c) 2024- Octa Robotics, Inc. All Rights Reserved.
 
-from importlib.metadata import version
 from packaging.version import parse
 import paho.mqtt
 import paho.mqtt.client as mqtt
 import time
 import ruamel.yaml
+from ruamel.yaml import CommentedMap, CommentedSeq
 import json
 import sys
 import logging
@@ -15,7 +15,35 @@ import ssl
 import threading
 
 from abc import ABC, abstractmethod
-from typing import Any, Callable
+from typing import Any, Callable, Optional
+
+
+def _ruamel_yaml_to_native(obj):
+    if isinstance(obj, CommentedMap):
+        return {k: _ruamel_yaml_to_native(v) for k, v in obj.items()}
+    elif isinstance(obj, CommentedSeq):
+        return [_ruamel_yaml_to_native(v) for v in obj]
+    elif isinstance(obj, dict):  # 念のため他の dict 型も対応
+        return {k: _ruamel_yaml_to_native(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [_ruamel_yaml_to_native(v) for v in obj]
+    else:
+        return obj
+
+
+def load_yaml_config(config_yaml_file: str) -> Optional[dict]:
+    config_yaml = ruamel.yaml.YAML()
+
+    try:
+        with open(config_yaml_file) as file:
+            config = _ruamel_yaml_to_native(config_yaml.load(file.read()))
+        if config is None or type(config) != dict:
+            return None
+
+        return config
+
+    except FileNotFoundError:
+        return None
 
 
 class RobotStatus(IntEnum):
@@ -67,9 +95,15 @@ class LciContext(ABC):
     # Event to wait sychronous API response
     _response_event: threading.Event
 
-    reset_callback: Callable[[], None]
+    reset_callback: Optional[Callable[[], None]]
 
-    def __init__(self, device_type: DeviceType, logger=None) -> None:
+    # To supress re-Registration soon after reset()
+    # Without this function, OpenRMF messaging results in multiple Registration without enough interval even when the lift or the door are out of operation.
+    # OpenRMF will send LiftRequest/DoorRequest before receiving LiftState/DoorState with the error code and consective error handlilng.
+    _last_reset_time: float
+    _deadtime_after_error: float
+
+    def __init__(self, device_type: DeviceType, deadtime_after_error: float, logger=None) -> None:
         if logger is None:
             self._logger = logging.getLogger('lci_client')
         else:
@@ -83,6 +117,9 @@ class LciContext(ABC):
 
         self.reset_callback = None
 
+        self._last_reset_time = 0
+        self._deadtime_after_error = deadtime_after_error
+
     @abstractmethod
     def initialize(self, config: dict) -> bool:
         pass
@@ -94,7 +131,15 @@ class LciContext(ABC):
     def _msg_callback(self, api: str, payload: dict) -> None:
         pass
 
-    def reset(self):
+    def in_deadtime(self) -> bool:
+        return time.time() < self._last_reset_time + self._deadtime_after_error
+
+    def reset(self, no_deadtime: bool = False):
+        if no_deadtime:
+            self._last_reset_time = 0
+        else:
+            self._last_reset_time = time.time()
+
         self._reset()
         if self.reset_callback is not None:
             self.reset_callback()
@@ -121,28 +166,28 @@ class LciElevatorContext(LciContext):
     _target_door: int
 
     def __init__(self, bldg_id: str, logger=None) -> None:
-        super().__init__(DeviceType.ELEVATOR, logger)
+        super().__init__(DeviceType.ELEVATOR, 30, logger)
         self._bldg_id = bldg_id
 
     def initialize(self, config: dict) -> bool:
-        self._bank_id = config.get('lci_bank_id', None)
-        self._elevator_id = config.get('lci_elevator_id', None)
-        floor_list_tmp = config.get('lci_floor_list', None)
+        self._bank_id = config.get('lci_bank_id', '')
+        self._elevator_id = config.get('lci_elevator_id', '')
+        floor_list_tmp = config.get('lci_floor_list', [])
 
         ret = True
-        if self._bank_id == None:
+        if self._bank_id == '':
             self._logger.error('[LCI] <lci_bank_id> is not specified.')
             ret = False
 
-        if self._elevator_id == None:
+        if self._elevator_id == '':
             self._logger.error(
                 '[LCI] <lci_elevator_id> is not specified. Use 0.')
-            self._elevator_id = 0
+            self._elevator_id = '0'
         else:
             self._elevator_id = str(self._elevator_id)
 
-        if type(floor_list_tmp) is not ruamel.yaml.comments.CommentedSeq:
-            self._logger.error('[LCI] <lci_floor_list> is not a list.')
+        if type(floor_list_tmp) is not list or len(floor_list_tmp) == 0:
+            self._logger.error('[LCI] <lci_floor_list> is not a valid list.')
             ret = False
 
         self._floor_list = []
@@ -203,7 +248,8 @@ class LciElevatorContext(LciContext):
                             if not payload.get('dry_run', False):
                                 self._is_registered = True
                         case 'ReleaseResult':
-                            self.reset()
+                            # This reset() is under the normal procedure so the deadtime is not needed.
+                            self.reset(True)
                         case 'ElevatorStatus':
                             self._current_floor = payload.get(
                                 'floor', self._current_floor)
@@ -226,25 +272,25 @@ class LciDoorContext(LciContext):
     _current_lock: int
 
     def __init__(self, bldg_id: str, logger=None) -> None:
-        super().__init__(DeviceType.DOOR, logger)
+        super().__init__(DeviceType.DOOR, 10, logger)
         self._bldg_id = bldg_id
 
     def initialize(self, config: dict) -> bool:
-        self._floor_id = config.get('lci_floor_id', None)
-        self._door_id = config.get('lci_door_id', None)
-        self._door_type = config.get('lci_door_type', None)
+        self._floor_id = config.get('lci_floor_id', '')
+        self._door_id = config.get('lci_door_id', '')
+        self._door_type = config.get('lci_door_type', '')
 
         ret = True
 
-        if self._floor_id == None:
+        if self._floor_id == '':
             self._logger.error('[LCI] <lci_floor_id> is not specified.')
             ret = False
 
-        if self._door_id == None:
+        if self._door_id == '':
             self._logger.error('[LCI] <lci_door_id> is not specified')
             ret = False
 
-        if self._door_type == None:
+        if self._door_type == '':
             self._logger.error('[LCI] <lci_door_type> is not specified')
             ret = False
 
@@ -275,7 +321,8 @@ class LciDoorContext(LciContext):
                         if not payload.get('dry_run', False):
                             self._is_registered = True
                     case 'ReleaseResult':
-                        self.reset()
+                        # This reset() is under the normal procedure so the deadtime is not needed.
+                        self.reset(True)
                     case 'DoorStatus':
                         if self._door_type == 'lock':
                             self._current_lock = payload.get('lock', 1)
@@ -317,23 +364,25 @@ class LciClient:
             cert_dir (str): Path of directory including the certificate files of LCI Robot Account provided by Octa Robotics
         """
 
-        yaml = ruamel.yaml.YAML()
-        with open(config_file_path) as file:
-            config = yaml.load(file.read())
+        config = load_yaml_config(config_file_path)
+        if config is None:
+            self._logger.error(
+                f'[LCI] Failed to load yaml config: {config_file_path}')
+            return False
 
-        self._mqtt_server = config.get('lci_mqtt_server', None)
-        self._bldg_id = config.get('lci_bldg_id', None)
+        self._mqtt_server = config.get('lci_mqtt_server', '')
+        self._bldg_id = config.get('lci_bldg_id', '')
 
-        if self._mqtt_server == None:
+        if self._mqtt_server == '':
             self._logger.error('[LCI] <lci_mqtt_server> is not specified.')
             return False
 
-        if self._bldg_id == None:
+        if self._bldg_id == '':
             self._logger.error('[LCI] <lci_bldg_id> is not specified.')
             return False
 
         elevator_config = config.get('elevators', None)
-        if type(elevator_config) is ruamel.yaml.comments.CommentedSeq:
+        if type(elevator_config) is list:
             for ec in elevator_config:
                 context = LciElevatorContext(self._bldg_id, self._logger)
                 if context.initialize(ec):
@@ -341,7 +390,7 @@ class LciClient:
                     self._context_dict.update({context._topic_prefix: context})
 
         door_config = config.get('doors', None)
-        if type(door_config) is ruamel.yaml.comments.CommentedSeq:
+        if type(door_config) is list:
             for dc in door_config:
                 context = LciDoorContext(self._bldg_id, self._logger)
                 if context.initialize(dc):
@@ -396,7 +445,7 @@ class LciClient:
             self._mqtt_client.connect(
                 str(self._mqtt_server), port=mqtt_port)
         except Exception as e:
-            self._logger.error('[LCI] Exception in LciClient: {e}')
+            self._logger.error(f'[LCI] Exception in LciClient: {e}')
             return False
 
         return True
@@ -531,26 +580,34 @@ class LciClient:
         return self._publish(context, 'RobotStatus', {'state': robot_status.value}, 20, wait_response)
 
     def do_call_elevator(self, context: LciElevatorContext,
-                         origination: str, destination: str,
-                         origination_door: int = 0, destination_door: int = 0,
+                         origination: Optional[str], destination: Optional[str],
+                         origination_door: Optional[int] = 0, destination_door: Optional[int] = 0,
                          direction: int = 0) -> bool:
 
         if context._target_floor == '':
+            if origination is None or origination_door is None:
+                self._logger.debug(f'[LCI] Bad params for 1st CallElevator: origination: {origination}, origination_door: {origination_door}')  # noqa
+                return False
+
             context._target_floor = origination
             context._target_door = origination_door
         else:
+            if destination is None or destination_door is None:
+                self._logger.debug(f'[LCI] Bad params for 2nd CallElevator: destination: {destination}, destination_door: {destination_door}')  # noqa
+                return False
+
             context._target_floor = destination
             context._target_door = destination_door
 
-        payload = {'direction': direction}
+        payload: dict = {'direction': direction}
 
-        if origination is not None:
+        if origination is not None and origination_door is not None:
             payload.update({
                 'origination': origination,
                 'origination_door': origination_door
             })
 
-        if destination is not None:
+        if destination is not None and destination_door is not None:
             payload.update({
                 'destination': destination,
                 'destination_door': destination_door
@@ -561,7 +618,7 @@ class LciClient:
     def do_request_elevator_status(self, context: LciElevatorContext) -> bool:
         return self._publish(context, 'RequestElevatorStatus', {})
 
-    def do_open_door(self, context: LciDoorContext, direction: int = None) -> bool:
+    def do_open_door(self, context: LciDoorContext, direction: Optional[int] = None) -> bool:
         if context._device_type == 'flap' and direction is not None:
             return self._publish(context, 'OpenDoor', {'direciton': direction}, 20)
         else:
@@ -586,9 +643,9 @@ if __name__ == '__main__':
         sys.exit(1)
 
     context_dict = lci_client.get_contexts()
-    context = None
+    context: Optional[LciElevatorContext] = None
     for c in context_dict.values():
-        if c.get_device_type() is DeviceType.ELEVATOR:
+        if isinstance(c, LciElevatorContext):
             context = c
             break
 
