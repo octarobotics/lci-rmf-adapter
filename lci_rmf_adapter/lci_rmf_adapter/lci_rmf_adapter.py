@@ -447,8 +447,9 @@ class LciRmfAdapter(Node):
                 lci_client.RobotStatus.HAS_GOT_OFF, False)
             time.sleep(1)
 
-        # For resetting, no need to receive the corresponding response from LCI
-        self._lci_client.do_release(rl_context._lci_context, False)
+            # For resetting, no need to receive the corresponding response from LCI
+            self._lci_client.do_release(rl_context._lci_context, False)
+
         rl_context.reset()
 
     def _door_request_callback(self, msg: DoorRequest) -> None:
@@ -496,17 +497,25 @@ class LciRmfAdapter(Node):
                 self.get_logger().info(f'[{msg.door_name}] OpenDoor')
 
     def reset_door(self, rd_context: RmfDoorContext):
-        # For resetting, no need to receive the corresponding response from LCI
-        self._lci_client.do_release(rd_context._lci_context, False)
+        if rd_context._lci_context._is_registered:
+            # For resetting, no need to receive the corresponding response from LCI
+            self._lci_client.do_release(rd_context._lci_context, False)
         rd_context.reset()
 
 
 def main(args=None):
     rclpy.init(args=args)
-    lci_rmf_lift_adapter = LciRmfAdapter()
-    rclpy.spin(lci_rmf_lift_adapter)
-    lci_rmf_lift_adapter.destroy_node()
-    rclpy.shutdown()
+    lci_rmf_adapter = LciRmfAdapter()
+    try:
+        rclpy.spin(lci_rmf_adapter)
+    finally:
+        for rl_context in lci_rmf_adapter._lift_context_dict.values():
+            lci_rmf_adapter.reset_lift(rl_context)
+        for rd_context in lci_rmf_adapter._door_context_dict.values():
+            lci_rmf_adapter.reset_door(rd_context)
+
+        lci_rmf_adapter.destroy_node()
+        rclpy.shutdown()
 
 
 if __name__ == '__main__':
