@@ -4,7 +4,7 @@
 LIFT_NAME="/lci/simulator/1/1"
 
 # If using another separater from "/", please set LCI_DEVICE_NAME_SEPARATER in start.sh
-LIFT_NAME="_lci_simulator_1_1"
+# LIFT_NAME="_lci_simulator_1_1"
 
 ORIGINATION="B1"
 DESTINATION="M5"
