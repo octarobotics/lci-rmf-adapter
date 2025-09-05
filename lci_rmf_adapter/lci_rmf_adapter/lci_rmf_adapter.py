@@ -168,6 +168,8 @@ class LciRmfAdapter(Node):
     _lift_state_pub: Publisher
     _door_state_pub: Publisher
 
+    _device_name_separater: str
+
     def __init__(self) -> None:
         super().__init__('LciRmfAdapter')
 
@@ -176,12 +178,16 @@ class LciRmfAdapter(Node):
                                ParameterDescriptor(description='Path to server_config.yaml provided by Octa Robotics, which includes a single elevator setting.'))
         self.declare_parameter('lci_cert_dir',  '',
                                ParameterDescriptor(description='Path to a certificate directory including certificate files (*.pem, ClientID) provided by Octa Robotics.'))
+        self.declare_parameter('lci_device_name_separater',  '/',
+                               ParameterDescriptor(description='Separater character(s) of lift_name and door_name used within RMF (default: "/")'))
 
         # Initializing LciClient
         # ros2 run lci_rmf_lift_adapter lci_rmf_lift_adapter --ros-args -p "lci_server_config:=<path to server_config.yaml>" -p "lci_cert_dir:=<path to cert dir including pem files>"
         server_config_file = self.get_parameter(
             'lci_server_config').value
         cert_dir = self.get_parameter('lci_cert_dir').value
+        self._device_name_separater = self.get_parameter(
+            'lci_device_name_separater').value
 
         self.get_logger().info(
             f'Use "{server_config_file}" and "{cert_dir}"')
@@ -253,6 +259,8 @@ class LciRmfAdapter(Node):
 
         for rl_context in self._lift_context_dict.values():
             lift_state = rl_context.get_status()
+            lift_state.lift_name = lift_state.lift_name.replace(
+                '/', self._device_name_separater)
 
             if not is_connected:
                 lift_state.current_mode = LiftState.MODE_OFFLINE
@@ -262,6 +270,8 @@ class LciRmfAdapter(Node):
 
         for rd_context in self._door_context_dict.values():
             door_state = rd_context.get_status()
+            door_state.door_name = door_state.door_name.replace(
+                '/', self._device_name_separater)
 
             if not is_connected:
                 door_state.current_mode = DoorMode(value=DoorMode.MODE_OFFLINE)
@@ -281,7 +291,9 @@ class LciRmfAdapter(Node):
                     rd_context._lci_context)
 
     def _lift_request_callback(self, msg: LiftRequest) -> None:
-        rl_context = self._lift_context_dict.get(msg.lift_name, None)
+        lift_name_key = msg.lift_name.replace(self._device_name_separater, '/')
+
+        rl_context = self._lift_context_dict.get(lift_name_key, None)
         if rl_context is None:
             return
 
@@ -453,7 +465,9 @@ class LciRmfAdapter(Node):
         rl_context.reset()
 
     def _door_request_callback(self, msg: DoorRequest) -> None:
-        rd_context = self._door_context_dict.get(msg.door_name, None)
+        door_name_key = msg.door_name.replace(self._device_name_separater, '/')
+
+        rd_context = self._door_context_dict.get(door_name_key, None)
         if rd_context is None:
             return
 

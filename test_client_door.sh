@@ -3,6 +3,9 @@
 
 DOOR_NAME="/lci/simulator/1F/1"
 
+# If using another separater from "/", please set LCI_DEVICE_NAME_SEPARATER in start.sh
+# DOOR_NAME="_lci_simulator_1F_1"
+
 #LOG_LEVEL=debug
 LOG_LEVEL=info
 
