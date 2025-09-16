@@ -400,14 +400,6 @@ class LciClient:
             v2_0_0 = parse('2.0.0')
             paho_version = parse(paho.mqtt.__version__)
 
-            if v2_0_0 <= paho_version:
-                self._mqtt_client = mqtt.Client(
-                    mqtt.CallbackAPIVersion.VERSION1,
-                    protocol=mqtt.MQTTv311, userdata=self)
-            else:
-                self._mqtt_client = mqtt.Client(
-                    protocol=mqtt.MQTTv311, userdata=self)
-
             # Default client_id. It is needed for on-premise version
             self._robot_id = f'_DUMMYID'
             mqtt_port = 1883
@@ -416,10 +408,25 @@ class LciClient:
                 try:
                     with open(cert_dir + '/ClientID') as file:
                         self._robot_id = file.readline().replace("\n", "")
+                except Exception as e:
+                    self._logger.warning(
+                        f'[LCI] Exception in LciClient: {e}. Use robot_id: {self._robot_id}')
 
-                    self._mqtt_client.reinitialise(
-                        client_id=self._robot_id, userdata=self)
+            # reinitialize() does not support mqtt.CallbackAPIVersion.VERSION1.
+            # so it is needed to re-create an instance.
+            if v2_0_0 <= paho_version:
+                self._mqtt_client = mqtt.Client(
+                    mqtt.CallbackAPIVersion.VERSION1,
+                    protocol=mqtt.MQTTv311,
+                    client_id=self._robot_id,
+                    userdata=self)
+            else:
+                self._mqtt_client = mqtt.Client(
+                    client_id=self._robot_id,
+                    protocol=mqtt.MQTTv311, userdata=self)
 
+            if cert_dir != None:
+                try:
                     ca_files = glob.glob(cert_dir + '/*.pem')
                     cert_files = glob.glob(
                         cert_dir + '/*certificate.pem.crt')
@@ -431,11 +438,8 @@ class LciClient:
                     mqtt_port = 8883
 
                 except Exception as e:
-                    self._logger.warning(f'[LCI] Exception in LciClient: {e}')
-
-                    # Fallback to on-premise version
-                    self._robot_id = f'_DUMMYID'
-                    mqtt_port = 1883
+                    self._logger.warning(
+                        f'[LCI] Exception in LciClient: {e}. Use Plain MQTT port: {mqtt_port}')
 
             self._mqtt_client.on_connect = self._on_connect
             self._mqtt_client.on_message = self._on_message

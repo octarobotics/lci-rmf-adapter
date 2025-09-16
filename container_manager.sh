@@ -1,8 +1,12 @@
 #!/bin/bash
 # Copyright (c) 2024- Octa Robotics, Inc. All Rights Reserved.
 
-build() {
-    docker compose build
+ROS_DISTRO=humble
+# ROS_DISTRO=jazzy
+
+
+build() { 
+    docker compose build --build-arg ROS_DISTRO=${ROS_DISTRO}
 }
 
 start() {

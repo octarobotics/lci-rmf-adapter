@@ -19,7 +19,7 @@ This package bridges ROS2 (RMF Lift and Door Adapter) to LCI.
 
 
 # System requirements
-- ROS2 Humble
+- ROS2 Humble or Jazzy
 - Python packages
   - paho-mqtt == 1.6.1
   - ruamel.yaml
@@ -71,6 +71,7 @@ To use lci_rmf_adapter quickly, it is recommended to use Docker.
 
 [container_manager.sh](container_manager.sh) provides an utility for Docker.
 
+- Edit `ROS_DISTRO` in [container_manager.sh](container_manager.sh) to use a distribution other than humble.
 - Edit `LCI_SERVER_CONFIG_YAML` and `LCI_CERT_DIR` in [start.sh](start.sh) to fit your environment.
 - `sudo ./container_manager.sh start`
   - It will build and start the container.

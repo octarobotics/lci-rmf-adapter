@@ -13,7 +13,7 @@ LCI_DEVICE_NAME_SEPARATER="/" # default
 LOG_LEVEL=info
 
 # To build only src directory that newly mounted when docker run
-source /opt/ros/humble/setup.sh
+source /opt/ros/${ROS_DISTRO}/setup.sh
 colcon build --symlink-install --packages-skip-build-finished --packages-select rmf_lift_msgs rmf_door_msgs
 colcon build --symlink-install --packages-select lci_rmf_adapter
 
