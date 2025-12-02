@@ -35,7 +35,8 @@ The more detail is exemplified in [Dockerfile](Dockerfile).
 | rmf_door_msgs/DoorState   | `/door_states`           | State of the door published by the door node                             |
 | rmf_door_msgs/DoorRequest | `/adapter_door_requests` | Requests to be sent to the door supervisor to request operation of doors |
 
-## Limitation
+# Limitation
+## For Lift
 - When the robot is at the origination floor, `LiftRequest.destination_floor` shall be `"<origination>"` or `"<origination>:<destination>"`.
 - After the robot entered the car, `LiftRequest.destination_floor` shall be `"<destination>"` or `"<destination>:<destination>"`.
 - **`"<origination>:<destination>"` format is required especially when the backend lift API of LCI requires both `"<origination>"` and `"<destination>"` at the first request.**
@@ -51,6 +52,17 @@ For example, if the robot wants to use the lift from `B1` of the front door to `
 
 
 - The arrival at the final destination can be detected by checking if `LiftRequest.current_floor` and `LiftRequest.door_state` are `8F_r` and `LiftState.DOOR_OPEN` respectively.
+
+## For Door
+
+Although LCI supports directional doors (e.g. flap barrier turnstiles), which do not allow reverse passing, rmf_door_msgs does not.
+
+To make up for this lack of functionality, lci_rmf_adapter assumes the entering direction (passing from a low-security area to a high-security area) is also applicable for the leaving direction (passing from a high-security area to a low-security area).
+
+In case that the door detects reverse passing and closes itself when the robot is leaving via the door, please use the correct direction value `2` by extending LciRmfAdapter or other means.
+See *if*-block starting with `if rd_context._lci_context._door_type == 'flap':` in [lci_rmf_adapter.py](lci_rmf_adapter/lci_rmf_adapter/lci_rmf_adapter.py).
+
+The directional doors are marked with `lci_door_type: flap` in the config files of LCI (see [LCI files](#LCI files)).
 
 
 # LCI files

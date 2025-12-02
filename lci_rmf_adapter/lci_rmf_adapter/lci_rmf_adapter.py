@@ -502,7 +502,21 @@ class LciRmfAdapter(Node):
                     self.get_logger().info(
                         f'[{msg.door_name}] Registration')
 
-                res = self._lci_client.do_open_door(rd_context._lci_context)
+                direction = None
+                if rd_context._lci_context._door_type == 'flap':
+                    # Although LCI supports directional doors, such as flap barrier turnstiles, which do not allow reverse passing, rmf_door_msgs does not.
+                    # To manage this lack of functionality, lci_rmf_adapter assumes the entering direction (passing from a low-security area to a high-security area)
+                    # is also applicable for the leaving direction (passing from a high-security area to a low-security area).
+                    # When leaving, if the door detects reverse passing and closes itself, please use the correct direciton value `2` by extending LciRmfAdapter or other means.
+
+                    # direction: 1 means the entering direciton
+                    direction = 1
+
+                    # direciton: 2 means the leaving direction
+                    # direction = 2
+
+                res = self._lci_client.do_open_door(
+                    rd_context._lci_context, direction)
                 if not res:
                     self.get_logger().error(
                         f'[{msg.door_name}] OpenDoor failed')
