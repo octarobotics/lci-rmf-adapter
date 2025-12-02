@@ -623,8 +623,8 @@ class LciClient:
         return self._publish(context, 'RequestElevatorStatus', {})
 
     def do_open_door(self, context: LciDoorContext, direction: Optional[int] = None) -> bool:
-        if context._device_type == 'flap' and direction is not None:
-            return self._publish(context, 'OpenDoor', {'direciton': direction}, 20)
+        if context._door_type == 'flap' and direction is not None:
+            return self._publish(context, 'OpenDoor', {'direction': direction}, 20)
         else:
             return self._publish(context, 'OpenDoor', {}, 20)
 
