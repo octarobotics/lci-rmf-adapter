@@ -62,7 +62,7 @@ To make up for this lack of functionality, lci_rmf_adapter assumes the entering 
 In case that the door detects reverse passing and closes itself when the robot is leaving via the door, please use the correct direction value `2` by extending LciRmfAdapter or other means.
 See *if*-block starting with `if rd_context._lci_context._door_type == 'flap':` in [lci_rmf_adapter.py](lci_rmf_adapter/lci_rmf_adapter/lci_rmf_adapter.py).
 
-The directional doors are marked with `lci_door_type: flap` in the config files of LCI (see [LCI files](#LCI files)).
+The directional doors are marked with `lci_door_type: flap` in the config files of LCI (see [LCI files](#lci-files)).
 
 
 # LCI files
