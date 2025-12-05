@@ -115,6 +115,11 @@ Please edit `DOOR_NAME` in [test_client_door.sh](test_client_door.sh) for trial
 
 `DOOR_NAME` is of the format `/lci/<bldg_id>/<floor_id>/<door_id>`.
 
+## Separater for device names
+RMF Web have a trouble with slash separated lift_name and door_name because it may require those values to be URL safe.
+
+To avoid their limitation, the separater replacement function is supported.
+See `LCI_DEVICE_NAME_SEPARATER` in [start.sh](start.sh).
 
 # Use LCI directly
 

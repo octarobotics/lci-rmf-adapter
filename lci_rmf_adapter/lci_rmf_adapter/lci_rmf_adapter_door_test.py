@@ -27,7 +27,7 @@ class LciRmfAdapterDoorTest(Node):
 
         # Parameters used in this Node
         self.declare_parameter('door_name', '',
-                               ParameterDescriptor(description='Lift name "/lci/<bldg_id>/<bank_id>/<elevator_id>" to specify LCI-ed elevator.'))
+                               ParameterDescriptor(description='Door name "/lci/<bldg_id>/<floor_id>/<door_id>" to specify LCI-ed door.'))
 
         self._door_name = self.get_parameter('door_name').value
 
@@ -104,6 +104,10 @@ class LciRmfAdapterDoorTest(Node):
                         f'[{self._door_name}] [Terminate]')
 
                     raise SystemExit
+                else:
+                    self.get_logger().info(
+                        f'[{self._door_name}] [OpenDoor]')
+                    self.request_door(open_close=True)
 
 
 def main(args=None):

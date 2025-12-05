@@ -135,9 +135,11 @@ class RmfLiftContext(RmfContext):
 
 class RmfDoorContext(RmfContext):
     _lci_context: lci_client.LciDoorContext
+    _is_door_open_asked: bool
 
     def __init__(self, lci_context: lci_client.LciDoorContext, logger=None) -> None:
         super().__init__(lci_context, logger)
+        self._is_door_open_asked = False
 
     def get_status(self) -> DoorState:
         door_state = DoorState()
@@ -157,6 +159,16 @@ class RmfDoorContext(RmfContext):
         # door_state.door_time shall be set with rclpy.Time
 
         return door_state
+
+    def reset(self) -> None:
+        super().reset()
+        self._is_door_open_asked = False
+
+    def is_door_open_asked(self) -> bool:
+        return self._is_door_open_asked
+
+    def set_door_open_asked(self, onoff: bool) -> None:
+        self._is_door_open_asked = onoff
 
 
 class LciRmfAdapter(Node):
@@ -502,6 +514,10 @@ class LciRmfAdapter(Node):
                     self.get_logger().info(
                         f'[{msg.door_name}] Registration')
 
+                if rd_context.is_door_open_asked():
+                    # LCI do not need multiple OpenDoor command because LCI holds the request of OpenDoor as an internal state.
+                    return
+
                 direction = None
                 if rd_context._lci_context._door_type == 'flap':
                     # Although LCI supports directional doors, such as flap barrier turnstiles, which do not allow reverse passing, rmf_door_msgs does not.
@@ -522,6 +538,7 @@ class LciRmfAdapter(Node):
                         f'[{msg.door_name}] OpenDoor failed')
                     self.reset_door(rd_context)
                     return
+                rd_context.set_door_open_asked(True)
                 self.get_logger().info(f'[{msg.door_name}] OpenDoor')
 
     def reset_door(self, rd_context: RmfDoorContext):
