@@ -83,10 +83,15 @@ To use lci_rmf_adapter quickly, it is recommended to use Docker.
 
 [container_manager.sh](container_manager.sh) provides an utility for Docker.
 
-- Edit `ROS_DISTRO` in [container_manager.sh](container_manager.sh) to use a distribution other than humble.
+- To use jazzy, `export ROS_DISTRO=jazzy`.
+- To use CycloneDDS, `export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp`.
+  - If you want to use other cyclonedds.xml than cyclonedds.xml.default, `export DDS_CONFIG=<path to your cyclonedds.xml>`
+- To use other ROS_DOMAIN_ID than 0, `export ROS_DOMAIN_ID=<your ROS_DOMAIN_ID>`.
+- If you do not want to use the environment variables, edit [docker-compose.yml](docker-compose.yml) directly.
 - Edit `LCI_SERVER_CONFIG_YAML` and `LCI_CERT_DIR` in [start.sh](start.sh) to fit your environment.
-- `sudo ./container_manager.sh start`
+- `sudo -E ./container_manager.sh start`
   - It will build and start the container.
+  - Do not forget `-E` option when you use the environment variables to configure lci_rmf_adapter.
 - `sudo ./container_manager.sh login`
   - It will login you in the container environment.
 - `./start.sh`

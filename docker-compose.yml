@@ -1,6 +1,6 @@
 # Copyright (c) 2024- Octa Robotics, Inc. All Rights Reserved.
 
-version: '3'
+version: "3"
 networks: {}
 
 volumes:
@@ -15,6 +15,11 @@ services:
   lci_rmf_adapter:
     build:
       context: .
+      args:
+        # ROS_DISTRO should be jazzy or humble (default)
+        ROS_DISTRO: ${ROS_DISTRO:-humble}
+        # RMW_IMPLEMENTATION can be rmw_fastrtps_cpp (default) or rmw_cyclonedds_cpp
+        RMW_IMPLEMENTATION: ${RMW_IMPLEMENTATION:-rmw_fastrtps_cpp}
     image: lci_rmf_adapter
     container_name: lci_rmf_adapter
     privileged: true
@@ -22,10 +27,16 @@ services:
     command: bash
     restart: always
     network_mode: host
+    ipc: host
     tmpfs:
       - /run
       - /tmp
+    environment:
+      CYCLONEDDS_URI: file:///root/cyclonedds.xml
+      ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}
     volumes:
-      - 'lci_rmf_adapter_src:/root/src'
-      - '/dev:/dev'
-
+      - type: bind
+        source: ${DDS_CONFIG:-cyclonedds.xml.default}
+        target: "/root/cyclonedds.xml"
+      - "lci_rmf_adapter_src:/root/src"
+      - "/dev:/dev"
