@@ -527,18 +527,18 @@ class LciClient:
         config = load_yaml_config(config_file_path)
         if config is None:
             self._logger.error(
-                f'[/lci] Failed to load yaml config: {config_file_path}')
+                f'[lci] Failed to load yaml config: {config_file_path}')
             return False
 
         self._mqtt_server = config.get('lci_mqtt_server', '')
         self._bldg_id = config.get('lci_bldg_id', '')
 
         if self._mqtt_server == '':
-            self._logger.error('[/lci] <lci_mqtt_server> is not specified.')
+            self._logger.error('[lci] <lci_mqtt_server> is not specified.')
             return False
 
         if self._bldg_id == '':
-            self._logger.error('[/lci] <lci_bldg_id> is not specified.')
+            self._logger.error('[lci] <lci_bldg_id> is not specified.')
             return False
 
         elevator_config = config.get('elevators', None)
@@ -570,7 +570,7 @@ class LciClient:
                         self._robot_id = file.readline().replace("\n", "")
                 except Exception as e:
                     self._logger.warning(
-                        f'[/lci] Exception in LciClient: {e}. Use robot_id: {self._robot_id}')
+                        f'[lci] Exception in LciClient: {e}. Use robot_id: {self._robot_id}')
 
             # reinitialize() does not support mqtt.CallbackAPIVersion.VERSION1.
             # so it is needed to re-create an instance.
@@ -599,7 +599,7 @@ class LciClient:
 
                 except Exception as e:
                     self._logger.warning(
-                        f'[/lci] Exception in LciClient: {e}. Use Plain MQTT port: {mqtt_port}')
+                        f'[lci] Exception in LciClient: {e}. Use Plain MQTT port: {mqtt_port}')
 
             self._mqtt_client.on_connect = self._on_connect
             self._mqtt_client.on_message = self._on_message
@@ -612,7 +612,7 @@ class LciClient:
             self._mqtt_client.connect(
                 str(self._mqtt_server), port=mqtt_port)
         except Exception as e:
-            self._logger.error(f'[/lci] Exception in LciClient: {e}')
+            self._logger.error(f'[lci] Exception in LciClient: {e}')
             return False
 
         return True
@@ -628,7 +628,7 @@ class LciClient:
 
     def _on_connect(self, client: mqtt.Client, userdata: 'LciClient', flags: dict, rc: int) -> None:
         self._logger.info(
-            f'[/lci] Connected to {self._mqtt_server} with client_id {self._robot_id}, result code {rc}')
+            f'[lci] Connected to {self._mqtt_server} with client_id {self._robot_id}, result code {rc}')
 
         self._mqtt_client.subscribe([
             (f'/lci/{self._bldg_id}/+/+/RegistrationResult/{self._robot_id}', 1),
@@ -642,7 +642,7 @@ class LciClient:
 
     def _on_disconnect(self, client: mqtt.Client, userdata: 'LciClient', rc: int) -> None:
         self._logger.info(
-            f'[/lci] Disconnected from {self._mqtt_server} with client_id {self._robot_id}, result code ' + str(rc))
+            f'[lci] Disconnected from {self._mqtt_server} with client_id {self._robot_id}, result code ' + str(rc))
 
     def _on_message(self, client: mqtt.Client, userdata: 'LciClient', msg: mqtt.MQTTMessage):
 
@@ -650,12 +650,12 @@ class LciClient:
             payload_kv = json.loads(msg.payload)
         except json.JSONDecodeError as e:
             self._logger.debug(
-                f'[/lci] Skip message with non-JSON payload: {e}')
+                f'[lci] Skip message with non-JSON payload: {e}')
             return
 
         if type(payload_kv) != dict:
             self._logger.error(
-                f'[/lci] MQTT Payload format error: {msg.topic}, {msg.payload}')
+                f'[lci] MQTT Payload format error: {msg.topic}, {msg.payload}')
             return
 
         self._msg_callback(msg.topic, payload_kv)
@@ -668,7 +668,7 @@ class LciClient:
         context = self._context_dict.get(topic_prefix, None)
         if context is None:
             self._logger.warning(
-                f'[/lci] No relevant context for {topic}, {payload_kv}')
+                f'[lci] No relevant context for {topic}, {payload_kv}')
             return
 
         context.msg_callback(api, payload_kv)
