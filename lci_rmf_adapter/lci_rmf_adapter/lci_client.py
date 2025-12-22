@@ -15,7 +15,7 @@ import ssl
 import threading
 
 from abc import ABC, abstractmethod
-from typing import Any, Callable, Optional
+from typing import Any, Optional
 
 
 def _ruamel_yaml_to_native(obj):
@@ -80,6 +80,32 @@ class LciFloorInfo:
         self.has_rear_door = has_rear_door
 
 
+class LciResponseEvent:
+    """
+    Customization of theading.Event to return response.
+
+    To be tolerant against occasional delays and missed communication, it is important to synchronize the internal variables with remote LCI devices after communicaiton recovery.
+    In this case, RequestElevatorStatus and RequestDoorStatus are needed to be sync API call.
+    To implement this function, it is needed this customization.
+    """
+
+    def __init__(self) -> None:
+        self._cond = threading.Condition(threading.Lock())
+        self.responded_payload: dict | None = None
+
+    def set(self, responded_payload: dict | None) -> None:
+        with self._cond:
+            self.responded_payload = responded_payload
+            self._cond.notify_all()
+
+    def wait(self, timeout=None) -> dict | None:
+        with self._cond:
+            signaled = (self.responded_payload is not None)
+            if not signaled:
+                self._cond.wait(timeout)
+            return self.responded_payload
+
+
 class LciContext(ABC):
     """
     Context class for LCI to support multiple elevators and doors with a single Robot Account.
@@ -93,15 +119,20 @@ class LciContext(ABC):
     _context_lock: threading.RLock
 
     # Event to wait sychronous API response
-    _response_event: threading.Event
-
-    reset_callback: Optional[Callable[[], None]]
+    _response_event_pool: dict[tuple[str, float], LciResponseEvent]
 
     # To supress re-Registration soon after reset()
     # Without this function, OpenRMF messaging results in multiple Registration without enough interval even when the lift or the door are out of operation.
     # OpenRMF will send LiftRequest/DoorRequest before receiving LiftState/DoorState with the error code and consective error handlilng.
-    _last_reset_time: float
-    _deadtime_after_error: float
+
+    _is_connected: bool
+    _last_get_disconnected_timestamp: float
+
+    _is_available: bool
+    _last_get_unavailable_timestamp: float
+
+    _is_registered: bool
+    _last_get_unregisterd_timestamp: float
 
     def __init__(self, device_type: DeviceType, deadtime_after_error: float, logger=None) -> None:
         if logger is None:
@@ -113,12 +144,16 @@ class LciContext(ABC):
 
         self._context_lock = threading.RLock()
 
-        self._response_event = threading.Event()
+        self._response_event_pool = {}
 
-        self.reset_callback = None
+        self._is_connected = False
+        self._last_get_disconnected_timestamp = 0
 
-        self._last_reset_time = 0
-        self._deadtime_after_error = deadtime_after_error
+        self._is_available = False
+        self._last_get_unavailable_timestamp = 0
+
+        self._is_registered = False
+        self._last_get_unregisterd_timestamp = 0
 
     @abstractmethod
     def initialize(self, config: dict) -> bool:
@@ -127,26 +162,158 @@ class LciContext(ABC):
     def get_device_type(self) -> DeviceType:
         return self._device_type
 
-    @abstractmethod
-    def _msg_callback(self, api: str, payload: dict) -> None:
-        pass
+    def register_response_event(self, api: str, requested_timestamp: float, response_event: LciResponseEvent) -> None:
+        # Called by the master thread
 
-    def in_deadtime(self) -> bool:
-        return time.time() < self._last_reset_time + self._deadtime_after_error
+        with self._context_lock:
+            self._response_event_pool.update({
+                (api, requested_timestamp): response_event
+            })
 
-    def reset(self, no_deadtime: bool = False):
-        if no_deadtime:
-            self._last_reset_time = 0
+    def remove_response_event(self, api: str,  requested_timestamp: float) -> None:
+        with self._context_lock:
+            res_event = self._response_event_pool.pop(
+                (api, requested_timestamp))
+
+            # To avoid waiting forever, it is needed to notify the called thread.
+            res_event.set(None)
+
+    def msg_callback(self, response_api: str, res_payload: dict) -> None:
+        # Called by the MQTT receiving thread to wake up the master thread
+
+        if response_api.endswith('Result'):
+            orig_api = response_api[:-6]
+        elif response_api.endswith('Status'):
+            orig_api = f'Request{response_api}'
         else:
-            self._last_reset_time = time.time()
+            return
 
-        self._reset()
-        if self.reset_callback is not None:
-            self.reset_callback()
+        try:
+            requested_timestamp = float(res_payload['requested_timestamp'])
+            with self._context_lock:
+                res_event = self._response_event_pool.pop(
+                    (orig_api, requested_timestamp))
+                res_event.set(res_payload)
+        except:
+            pass
+
+    def _get_result_code(self, res_payload: dict) -> ResultCode | None:
+        try:
+            return ResultCode(int(res_payload['result']))
+        except:
+            return None
+
+    def proc_response_payload(self, api: str, res_payload: dict | None) -> bool:
+        # Check and process response payload to change internal state and log.
+
+        if res_payload is None:
+            # This timeout may be because LCI server or device are not reachable.
+            self.set_connected(False)
+            self._logger.error(
+                f'[{self._topic_prefix}] [lci, {api}, res: timeout]')
+            return False
+
+        # Response from LCI device == LCI is connected.
+        self.set_connected(True)
+
+        result_code = self._get_result_code(res_payload)
+        if result_code is None:
+            # Bad paylaod
+            self._logger.error(
+                f'[{self._topic_prefix}] [lci, {api}, res: bad payload]')
+            return False
+
+        if result_code is ResultCode.UNDER_EMERGENCY:
+            self.set_available(False)
+            self._logger.error(
+                f'[{self._topic_prefix}] [lci, {api}, res: emergency]')
+            return False
+
+        self.set_available(True)
+
+        if result_code is ResultCode.ERROR:
+            self._logger.error(
+                f'[{self._topic_prefix}] [lci, {api}, res: error]')
+            return False
+
+        if result_code is ResultCode.FAIL:
+            self.set_registered(False)
+            self._logger.error(
+                f'[{self._topic_prefix}] [lci, {api}, res: fail]')
+            return False
+
+        # ResultCode.SUCCESS
+        match api:
+            case 'Registration':
+                dry_run = res_payload.get('dry_run', False)
+                if not isinstance(dry_run, bool):
+                    self._logger.error(
+                        f'[{self._topic_prefix}] [lci, {api}, res: bad format] dry_run: {dry_run}')
+                    return False
+
+                if dry_run:
+                    self._logger.debug(
+                        f'[{self._topic_prefix}] [lci, {api}, res: success (dry_run)]')
+                    return True
+
+                self.set_registered(True)
+                self._logger.debug(
+                    f'[{self._topic_prefix}] [lci, {api}, res: success]')
+                return True
+
+            case 'Release':
+                self.set_registered(False)
+                self._logger.debug(
+                    f'[{self._topic_prefix}] [lci, {api}, res: success]')
+                return True
+
+            case _:
+                # Another payload processing will be covered by child classes.
+                self._logger.debug(
+                    f'[{self._topic_prefix}] [lci, {api}, res: success]')
+                return True
 
     @abstractmethod
-    def _reset(self):
+    def _reset(self) -> None:
         pass
+
+    def set_connected(self, on_off: bool) -> None:
+        with self._context_lock:
+            if self._is_connected and not on_off:  # falling edge
+                self._last_get_disconnected_timestamp = time.time()
+
+                # If disconnected, synchronization with LCI is disrupted.
+                # Reset and wait for recovery.
+                self.set_available(False)
+
+            self._is_connected = on_off
+
+    def set_available(self, on_off: bool) -> None:
+        with self._context_lock:
+            if self._is_available and not on_off:  # falling edge
+                self._last_get_unavailable_timestamp = time.time()
+
+                self.set_registered(False)
+
+            self._is_available = on_off
+
+    def set_registered(self, on_off: bool) -> None:
+        with self._context_lock:
+            if self._is_registered and not on_off:  # falling edge
+                self._last_get_unregisterd_timestamp = time.time()
+
+                self._reset()
+
+            self._is_registered = on_off
+
+    def is_connected(self) -> bool:
+        return self._is_connected
+
+    def is_available(self) -> bool:
+        return self._is_available
+
+    def is_registered(self) -> bool:
+        return self._is_registered
 
 
 class LciElevatorContext(LciContext):
@@ -155,8 +322,6 @@ class LciElevatorContext(LciContext):
     _elevator_id: str
     _floor_list: list[LciFloorInfo]
 
-    _is_available: bool
-    _is_registered: bool
     _is_robot_in_the_car: bool
 
     _current_floor: str
@@ -176,18 +341,18 @@ class LciElevatorContext(LciContext):
 
         ret = True
         if self._bank_id == '':
-            self._logger.error('[LCI] <lci_bank_id> is not specified.')
+            self._logger.error('[lci] <lci_bank_id> is not specified.')
             ret = False
 
         if self._elevator_id == '':
             self._logger.error(
-                '[LCI] <lci_elevator_id> is not specified. Use 0.')
+                '[lci] <lci_elevator_id> is not specified. Use 0.')
             self._elevator_id = '0'
         else:
             self._elevator_id = str(self._elevator_id)
 
         if type(floor_list_tmp) is not list or len(floor_list_tmp) == 0:
-            self._logger.error('[LCI] <lci_floor_list> is not a valid list.')
+            self._logger.error('[lci] <lci_floor_list> is not a valid list.')
             ret = False
 
         self._floor_list = []
@@ -200,14 +365,12 @@ class LciElevatorContext(LciContext):
 
         if 63 < len(self._floor_list):
             self._logger.error(
-                '[LCI] LCI supports no more than 63 levels of floors.')
+                '[lci] LCI supports no more than 63 levels of floors.')
             ret = False
 
         if ret == False:
             return False
 
-        self._is_available = True
-        self._is_registered = False
         self._is_robot_in_the_car = False
 
         self._topic_prefix = f'/lci/{self._bldg_id}/{self._bank_id}/{self._elevator_id}'  # noqa
@@ -221,7 +384,6 @@ class LciElevatorContext(LciContext):
 
     def _reset(self):
         with self._context_lock:
-            self._is_registered = False
             self._is_robot_in_the_car = False
 
             # Set the door status closed for robots to refrain entering because ElevatorStatus is only updated during registered.
@@ -231,33 +393,32 @@ class LciElevatorContext(LciContext):
             self._target_floor = ''
             self._target_door = 0
 
-    def _msg_callback(self, api: str, payload: dict) -> None:
-        result = payload.get('result', ResultCode.ERROR.value)
-
+    def _set_current_floor_and_door(self, current_floor: str, current_door: int) -> None:
         with self._context_lock:
-            match result:
-                case ResultCode.UNDER_EMERGENCY.value:
-                    self._is_available = False
-                    self.reset()
+            self._current_floor = current_floor
+            self._current_door = current_door
 
-                case ResultCode.SUCCESS.value:
-                    self._is_available = True
+    def proc_response_payload(self, api: str, res_payload: dict | None) -> bool:
+        ret = super().proc_response_payload(api, res_payload)
 
-                    match api:
-                        case 'RegistrationResult':
-                            if not payload.get('dry_run', False):
-                                self._is_registered = True
-                        case 'ReleaseResult':
-                            # This reset() is under the normal procedure so the deadtime is not needed.
-                            self.reset(True)
-                        case 'ElevatorStatus':
-                            self._current_floor = payload.get(
-                                'floor', self._current_floor)
-                            self._current_door = payload.get('door', 0)
+        if res_payload is None or not ret:
+            return False
 
-                case _:
-                    self._is_available = True
-                    self.reset()
+        # ResultCode.SUCCESS
+
+        # No need of further processing for 'CallElevator' and 'RobotStatus'
+
+        if api == 'RequestElevatorStatus':
+            try:
+                self._set_current_floor_and_door(
+                    str(res_payload.get('floor', '')),
+                    int(res_payload.get('door', 0)))
+            except:
+                self._logger.error(
+                    f'[{self._topic_prefix}] [lci, {api}, res: bad format floor/door]')
+                return False
+
+        return True
 
 
 class LciDoorContext(LciContext):
@@ -265,8 +426,6 @@ class LciDoorContext(LciContext):
     _floor_id: str
     _door_id: str
     _door_type: str
-
-    _is_registered: bool
 
     _current_door: int
     _current_lock: int
@@ -283,15 +442,15 @@ class LciDoorContext(LciContext):
         ret = True
 
         if self._floor_id == '':
-            self._logger.error('[LCI] <lci_floor_id> is not specified.')
+            self._logger.error('[lci] <lci_floor_id> is not specified.')
             ret = False
 
         if self._door_id == '':
-            self._logger.error('[LCI] <lci_door_id> is not specified')
+            self._logger.error('[lci] <lci_door_id> is not specified.')
             ret = False
 
         if self._door_type == '':
-            self._logger.error('[LCI] <lci_door_type> is not specified')
+            self._logger.error('[lci] <lci_door_type> is not specified.')
             ret = False
 
         if ret == False:
@@ -299,37 +458,38 @@ class LciDoorContext(LciContext):
 
         self._topic_prefix = f'/lci/{self._bldg_id}/{self._floor_id}/{self._door_id}'  # noqa
 
-        self._is_registered = False
-
         self._current_door = 0
         self._current_lock = 1
 
         return True
 
     def _reset(self):
-        self._is_registered = False
-        self._current_door = 0
-        self._current_lock = 1
-
-    def _msg_callback(self, api: str, payload: dict) -> None:
-        result = payload.get('result', ResultCode.ERROR.value)
-
         with self._context_lock:
-            if result == ResultCode.SUCCESS.value:
-                match api:
-                    case 'RegistrationResult':
-                        if not payload.get('dry_run', False):
-                            self._is_registered = True
-                    case 'ReleaseResult':
-                        # This reset() is under the normal procedure so the deadtime is not needed.
-                        self.reset(True)
-                    case 'DoorStatus':
-                        if self._door_type == 'lock':
-                            self._current_lock = payload.get('lock', 1)
-                        else:
-                            self._current_door = payload.get('door', 0)
-            else:
-                self.reset()
+            self._current_door = 0
+            self._current_lock = 1
+
+    def proc_response_payload(self, api: str, res_payload: dict | None) -> bool:
+        ret = super().proc_response_payload(api, res_payload)
+
+        if res_payload is None or not ret:
+            return False
+
+        # ResultCode.SUCCESS
+
+        # No need of further processing for 'OpenDoor' and 'RobotStatus'
+
+        if api == 'RequestDoorStatus':
+            try:
+                if self._door_type == 'lock':
+                    self._current_lock = int(res_payload.get('lock', 1))
+                else:
+                    self._current_door = int(res_payload.get('door', 0))
+            except:
+                self._logger.error(
+                    f'[{self._topic_prefix}] [lci, {api}, res: bad format door/lock]')
+                return False
+
+        return True
 
 
 class LciClient:
@@ -367,18 +527,18 @@ class LciClient:
         config = load_yaml_config(config_file_path)
         if config is None:
             self._logger.error(
-                f'[LCI] Failed to load yaml config: {config_file_path}')
+                f'[/lci] Failed to load yaml config: {config_file_path}')
             return False
 
         self._mqtt_server = config.get('lci_mqtt_server', '')
         self._bldg_id = config.get('lci_bldg_id', '')
 
         if self._mqtt_server == '':
-            self._logger.error('[LCI] <lci_mqtt_server> is not specified.')
+            self._logger.error('[/lci] <lci_mqtt_server> is not specified.')
             return False
 
         if self._bldg_id == '':
-            self._logger.error('[LCI] <lci_bldg_id> is not specified.')
+            self._logger.error('[/lci] <lci_bldg_id> is not specified.')
             return False
 
         elevator_config = config.get('elevators', None)
@@ -410,7 +570,7 @@ class LciClient:
                         self._robot_id = file.readline().replace("\n", "")
                 except Exception as e:
                     self._logger.warning(
-                        f'[LCI] Exception in LciClient: {e}. Use robot_id: {self._robot_id}')
+                        f'[/lci] Exception in LciClient: {e}. Use robot_id: {self._robot_id}')
 
             # reinitialize() does not support mqtt.CallbackAPIVersion.VERSION1.
             # so it is needed to re-create an instance.
@@ -439,17 +599,20 @@ class LciClient:
 
                 except Exception as e:
                     self._logger.warning(
-                        f'[LCI] Exception in LciClient: {e}. Use Plain MQTT port: {mqtt_port}')
+                        f'[/lci] Exception in LciClient: {e}. Use Plain MQTT port: {mqtt_port}')
 
             self._mqtt_client.on_connect = self._on_connect
             self._mqtt_client.on_message = self._on_message
             self._mqtt_client.on_disconnect = self._on_disconnect
             # self.mqtt_client.enable_logger(self.logger)
 
+            # MQTT connection should be maintained.
+            self._mqtt_client.reconnect_delay_set(min_delay=1, max_delay=10)
+
             self._mqtt_client.connect(
                 str(self._mqtt_server), port=mqtt_port)
         except Exception as e:
-            self._logger.error(f'[LCI] Exception in LciClient: {e}')
+            self._logger.error(f'[/lci] Exception in LciClient: {e}')
             return False
 
         return True
@@ -465,7 +628,7 @@ class LciClient:
 
     def _on_connect(self, client: mqtt.Client, userdata: 'LciClient', flags: dict, rc: int) -> None:
         self._logger.info(
-            f'[LCI] Connected to {self._mqtt_server} with client_id {self._robot_id}, result code {rc}')
+            f'[/lci] Connected to {self._mqtt_server} with client_id {self._robot_id}, result code {rc}')
 
         self._mqtt_client.subscribe([
             (f'/lci/{self._bldg_id}/+/+/RegistrationResult/{self._robot_id}', 1),
@@ -479,7 +642,7 @@ class LciClient:
 
     def _on_disconnect(self, client: mqtt.Client, userdata: 'LciClient', rc: int) -> None:
         self._logger.info(
-            f'[LCI] Disconnected from {self._mqtt_server} with client_id {self._robot_id}, result code ' + str(rc))
+            f'[/lci] Disconnected from {self._mqtt_server} with client_id {self._robot_id}, result code ' + str(rc))
 
     def _on_message(self, client: mqtt.Client, userdata: 'LciClient', msg: mqtt.MQTTMessage):
 
@@ -487,12 +650,12 @@ class LciClient:
             payload_kv = json.loads(msg.payload)
         except json.JSONDecodeError as e:
             self._logger.debug(
-                f'[LCI] Skip message with non-JSON payload: {e}')
+                f'[/lci] Skip message with non-JSON payload: {e}')
             return
 
         if type(payload_kv) != dict:
             self._logger.error(
-                f'[LCI] MQTT Payload format error: {msg.topic}, {msg.payload}')
+                f'[/lci] MQTT Payload format error: {msg.topic}, {msg.payload}')
             return
 
         self._msg_callback(msg.topic, payload_kv)
@@ -503,85 +666,101 @@ class LciClient:
         api = token[-2]
 
         context = self._context_dict.get(topic_prefix, None)
-        if context is not None:
-            context._msg_callback(api, payload_kv)
-            self._logger.debug(f'[LCI] Received: {topic}, {payload_kv}')
-
-            if not api in ['ElevatorStatus', 'DoorStatus']:
-                context._response_event.set()
-
-        else:
+        if context is None:
             self._logger.warning(
-                f'[LCI] No relevant context for {topic}, {payload_kv}')
+                f'[/lci] No relevant context for {topic}, {payload_kv}')
+            return
 
-    def _publish(self, context: LciContext, api: str, payload: dict, timeout_sec: float = 0, wait_response: bool = True) -> bool:
+        context.msg_callback(api, payload_kv)
+        self._logger.debug(
+            f'[{context._topic_prefix}]   [mq_rcv] {topic}, {payload_kv}')
+
+    def _publish(self, context: LciContext, api: str, payload: dict, timeout_sec: float = 0, wait_response: bool = True) -> dict | None:
+        # returns response payload from LCI
+        # If wait_response is False, this function always returns None
+
         topic = f'{context._topic_prefix}/{api}/{self._robot_id}'
+        timestamp = int(time.time() * 1000)/1000
+
         payload.update({
             'robot_id': self._robot_id,
-            'timestamp': int(time.time() * 1000)/1000,
+            'timestamp': timestamp,
         })
         json_payload = json.dumps(payload)
 
-        need_to_sync = (0 < timeout_sec) and (
-            not api in ['RequestElevatorStatus', 'RequestDoorStatus'])
-
-        if need_to_sync:
-            context._response_event.clear()
-            qos = 1
-        else:
-            qos = 0
+        # To wait with timeout, LciResponseEvent (similar class to threading.Event) is registered to context.
+        if wait_response:
+            response_event = LciResponseEvent()
+            context.register_response_event(
+                api, timestamp, response_event)
 
         with self._publish_lock:
-            pub_info = self._mqtt_client.publish(topic, json_payload, qos=qos)
+            try:
+                pub_info = self._mqtt_client.publish(
+                    topic, json_payload, qos=1)
+            except Exception as e:
+                self._logger.error(
+                    f'[{context._topic_prefix}]   [mq_send, failed] {e}')
+                return None
 
-        if need_to_sync:
-            # Wait for completion of publish()
-            start_time = time.time()
-            while True:
-                try:
-                    # When the state is disconnection, wait_for_publish() will return soon with Exception
-                    pub_info.wait_for_publish(timeout=0.2)
+        # Wait for completion of publish()
+        start_time = time.time()
+        while True:
+            try:
+                # When the state is disconnection, wait_for_publish() will return soon with Exception
+                pub_info.wait_for_publish(timeout=0.2)
 
-                except Exception:
-                    time.sleep(0.2)
-                    continue
+            except Exception:
+                time.sleep(0.2)
+                continue
 
-                if pub_info.is_published():
-                    # Elapsed time between PUB and PUBACK
-                    self._logger.debug(f'[LCI] Published ({time.time()-start_time:.03f}): {topic}, {json_payload}')  # noqa
+            if pub_info.is_published():
+                # Elapsed time between PUB and PUBACK
+                self._logger.info(f'[{context._topic_prefix}]   [mq_send ({time.time()-start_time:.03f})] {api}, {payload}')  # noqa
 
-                    if wait_response:
-                        # Wait for receiving response from LCI
-                        start_time = time.time()
-                        ret = context._response_event.wait(timeout_sec)
-                        if ret:
-                            # Elapsed time between LCI's request and response
-                            self._logger.debug(f'[LCI] Response received ({time.time()-start_time:.03f}): {api}')  # noqa
-                        else:
-                            self._logger.debug(f'[LCI] Response timeout ({time.time()-start_time:.03f}): {api}')  # noqa
-                        return ret
-                    else:
-                        return True
+                if not wait_response:
+                    return None
 
-                elif start_time + timeout_sec < time.time():
-                    self._logger.debug(f'[LCI] Publish timeout ({time.time()-start_time:.03f}): {topic}, {json_payload}')  # noqa
-                    return False
+                # Wait for receiving response from LCI
+                start_time = time.time()
+                res_payload = response_event.wait(timeout_sec)
+                if res_payload is not None:
+                    # Elapsed time between LCI's request and response
+                    self._logger.info(f'[{context._topic_prefix}]   [mq_recv ({time.time()-start_time:.03f})] {api}, {res_payload}')  # noqa
+                else:
+                    self._logger.error(f'[{context._topic_prefix}]   [mq_recv, timeout ({time.time()-start_time:.03f})] {api}')  # noqa
+                return res_payload
 
-        return True
+            elif start_time + 5.0 < time.time():
+                # When publish() does not finish for 5 s, it should be considered disconnected.
+
+                self._logger.error(f'[{context._topic_prefix}]   [mq_send, timeout ({time.time()-start_time:.03f})] {api}, {payload}')  # noqa
+
+                if wait_response:
+                    # Clean up Event from context
+                    context.remove_response_event(api, timestamp)
+
+                return None
 
     def do_registration(self, context: LciContext, dry_run: bool = False) -> bool:
+        # When return False, this funciton should be retried.
+
         if dry_run:
             payload = {'dry_run': True}
         else:
             payload = {}
 
-        return self._publish(context, 'Registration', payload, 180)
+        res_payload = self._publish(context, 'Registration', payload, 185)
+        return context.proc_response_payload('Registration', res_payload)
 
     def do_release(self, context: LciContext, wait_response: bool = True) -> bool:
-        return self._publish(context, 'Release', {}, 20, wait_response)
+        res_payload = self._publish(context, 'Release', {}, 20, wait_response)
+        return context.proc_response_payload('Release', res_payload)
 
     def do_robot_status(self, context: LciContext, robot_status: RobotStatus, wait_response: bool = True) -> bool:
-        return self._publish(context, 'RobotStatus', {'state': robot_status.value}, 20, wait_response)
+        res_payload = self._publish(context, 'RobotStatus',
+                                    {'state': robot_status.value}, 20, wait_response)
+        return context.proc_response_payload('RobotStatus', res_payload)
 
     def do_call_elevator(self, context: LciElevatorContext,
                          origination: Optional[str], destination: Optional[str],
@@ -590,14 +769,14 @@ class LciClient:
 
         if context._target_floor == '':
             if origination is None or origination_door is None:
-                self._logger.debug(f'[LCI] Bad params for 1st CallElevator: origination: {origination}, origination_door: {origination_door}')  # noqa
+                self._logger.error(f'[{context._topic_prefix}] [1st CallElevator, bad params] origination: {origination}, origination_door: {origination_door}')  # noqa
                 return False
 
             context._target_floor = origination
             context._target_door = origination_door
         else:
             if destination is None or destination_door is None:
-                self._logger.debug(f'[LCI] Bad params for 2nd CallElevator: destination: {destination}, destination_door: {destination_door}')  # noqa
+                self._logger.error(f'[{context._topic_prefix}] [2nd CallElevator, bad params] destination: {destination}, destination_door: {destination_door}')  # noqa
                 return False
 
             context._target_floor = destination
@@ -617,19 +796,25 @@ class LciClient:
                 'destination_door': destination_door
             })
 
-        return self._publish(context, 'CallElevator', payload, 180)
+        res_payload = self._publish(context, 'CallElevator', payload, 20)
+        return context.proc_response_payload('CallElevator', res_payload)
 
     def do_request_elevator_status(self, context: LciElevatorContext) -> bool:
-        return self._publish(context, 'RequestElevatorStatus', {})
+        res_payload = self._publish(context, 'RequestElevatorStatus', {}, 10)
+        return context.proc_response_payload('RequestElevatorStatus', res_payload)
 
     def do_open_door(self, context: LciDoorContext, direction: Optional[int] = None) -> bool:
         if context._door_type == 'flap' and direction is not None:
-            return self._publish(context, 'OpenDoor', {'direction': direction}, 20)
+            res_payload = self._publish(
+                context, 'OpenDoor', {'direction': direction}, 20)
         else:
-            return self._publish(context, 'OpenDoor', {}, 20)
+            res_payload = self._publish(context, 'OpenDoor', {}, 20)
+
+        return context.proc_response_payload('OpenDoor', res_payload)
 
     def do_request_door_status(self, context: LciDoorContext) -> bool:
-        return self._publish(context, 'RequestDoorStatus', {})
+        res_payload = self._publish(context, 'RequestDoorStatus', {}, 10)
+        return context.proc_response_payload('RequestDoorStatus', res_payload)
 
 
 # Main routine

@@ -13,6 +13,8 @@ import threading
 from typing import Any, Optional
 from abc import ABC, abstractmethod
 import time
+from typing import Callable
+from queue import Queue
 
 
 class RmfContext(ABC):
@@ -22,22 +24,69 @@ class RmfContext(ABC):
 
     _is_occupied: bool
     _occupant_id: str
-    _lock: threading.Lock
+    _lock: threading.RLock
 
-    # buffer to neglect mutiple same LiftRequest
-    _destination_floor: str
+    # request queue to be dispatched from request_callback of Node
+    # It is to serialize commands to LCI
+    _request_queue: Queue[tuple[Callable, tuple]]
+
+    # To limit RequestElevatorStatus and RequestDoorStatus when it is in processing.
+    _in_request_proccessing: threading.Event
+
+    # Flas to surpress RequestElevatorStatus or RequestDoorStatus when resetting.
+    _under_resetting: bool
+
+    # To detect a failure of RMF
+    _last_recv_request_time: float
+
+    def _log_info(self, message: str) -> None:
+        self._logger.info(
+            f'[{self._lci_context._topic_prefix}] {message}')
+
+    def _log_error(self, message: str) -> None:
+        self._logger.error(
+            f'[{self._lci_context._topic_prefix}] {message}')
+
+    def _log_debug(self, message: str) -> None:
+        self._logger.debug(
+            f'[{self._lci_context._topic_prefix}] {message}')
+
+    def _log_warning(self, message: str) -> None:
+        self._logger.warning(
+            f'[{self._lci_context._topic_prefix}] {message}')
 
     def __init__(self, lci_context: lci_client.LciContext, logger=None) -> None:
         self._logger = logger
 
         self._lci_context = lci_context
-        self._lci_context.reset_callback = self.reset
 
         self._is_occupied = False
         self._occupant_id = ''
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
 
-        self._destination_floor = ''
+        self._request_queue = Queue()
+        threading.Thread(target=self._request_worker, daemon=True).start()
+
+        self._in_request_proccessing = threading.Event()
+
+        self._under_resetting = False
+
+        self._last_recv_request_time = 0
+
+    def _request_worker(self) -> None:
+        while True:
+            func, args = self._request_queue.get()
+            self._in_request_proccessing.set()
+            try:
+                func(*args)
+            except Exception as e:
+                self._log_error(
+                    f"[lra] Exception in {func} args={args}: {e}")
+            finally:
+                self._in_request_proccessing.clear()
+
+    def put_request(self, target: Callable, args: tuple = ()) -> None:
+        self._request_queue.put((target, args))
 
     def set_occupant(self, occupant_id: str) -> bool:
         with self._lock:
@@ -52,7 +101,8 @@ class RmfContext(ABC):
         with self._lock:
             self._is_occupied = False
             self._occupant_id = ''
-            self._destination_floor = ''
+            self._under_resetting = False
+            self._last_recv_request_time = 0
 
     def get_occupant(self) -> str:
         return self._occupant_id
@@ -73,6 +123,18 @@ class RmfLiftContext(RmfContext):
     _lci_context: lci_client.LciElevatorContext
     _rmf_floor_list: list[str]
 
+    # buffer to neglect mutiple same LiftRequest
+    _destination_floor: str
+
+    """
+    LciContext does not automatically recover to connected status and emergency status unless sending a message.
+    To induce RMF to send LiftRequest, actual MODE_OFFLINE and MODE_EMERGENCY are to be hidden by MODE_AGV after enough duration 30s.
+    """
+    _last_mode_agv_time: float
+
+    # Flag to disguise door_open_state to be closed for any reason
+    _hide_door_open_state: bool
+
     def __init__(self, lci_context: lci_client.LciElevatorContext, logger=None) -> None:
         super().__init__(lci_context, logger)
 
@@ -84,11 +146,49 @@ class RmfLiftContext(RmfContext):
             if f.has_rear_door:
                 self._rmf_floor_list.append(f'{f.floor_name}_r')
 
-    def get_status(self) -> LiftState:
+        self._destination_floor = ''
+
+        self._last_mode_agv_time = 0
+
+        self._hide_door_open_state = False
+
+    def reset(self) -> None:
+        with self._lock:
+            super().reset()
+            self._destination_floor = ''
+            self._hide_door_open_state = False
+
+    def _get_status(self) -> LiftState:
         lift_state = LiftState()
         lift_state.lift_name = self._lci_context._topic_prefix
         lift_state.available_floors = [
             x.floor_name for x in self._lci_context._floor_list]
+
+        lift_state.available_modes = [
+            LiftState.MODE_OFFLINE, LiftState.MODE_AGV, LiftState.MODE_EMERGENCY]
+
+        if not self._lci_context.is_connected():
+            lift_state.current_mode = LiftState.MODE_OFFLINE
+            lift_state.door_state = LiftState.DOOR_CLOSED
+            return lift_state
+
+        if not self._lci_context.is_available():
+            lift_state.current_mode = LiftState.MODE_EMERGENCY
+            lift_state.door_state = LiftState.DOOR_CLOSED
+            return lift_state
+
+        if time.time() < self._lci_context._last_get_unregisterd_timestamp + 10.0:
+            """
+            Lift and LCI require a deadtime for resetting sequence.
+            To surpress LiftRequest until the end of deadtime 10s, MODE_UNKNOWN is used instead of MODE_AGV.
+
+            This filter also works to force the interval of re-trial of sequence.
+            """
+            lift_state.current_mode = LiftState.MODE_UNKNOWN
+            lift_state.door_state = LiftState.DOOR_CLOSED
+            return lift_state
+
+        lift_state.current_mode = LiftState.MODE_AGV
 
         # encode door direction to floor_name
         match self._lci_context._current_door:
@@ -102,9 +202,10 @@ class RmfLiftContext(RmfContext):
                 lift_state.current_floor = self._lci_context._current_floor
                 lift_state.door_state = LiftState.DOOR_CLOSED
 
-        if not self._lci_context._is_registered:
+        if not self._lci_context.is_registered() or self._hide_door_open_state:
             # door_state must be masked as DOOR_CLOSED
-            # because _lci_context._current_door is not updated when it is not registered
+            # because _lci_context._current_door is not updated when it is not registered.
+            # It also needed several seconds after CallElevator.
             lift_state.door_state = LiftState.DOOR_CLOSED
 
         if self._lci_context._target_door == 2:
@@ -117,18 +218,23 @@ class RmfLiftContext(RmfContext):
         else:
             lift_state.motion_state = LiftState.MOTION_UNKNOWN
 
-        lift_state.available_modes = [
-            LiftState.MODE_OFFLINE, LiftState.MODE_AGV, LiftState.MODE_EMERGENCY]
-
-        if self._lci_context._is_available:
-            lift_state.current_mode = LiftState.MODE_AGV
-        else:
-            lift_state.current_mode = LiftState.MODE_EMERGENCY
-
-        # lift_state.current_mode will be overwritten with LiftState.MODE_OFFLINE if _lci_client is not connected.
         # lift_state.lift_time shall be set with rclpy.Time
 
         lift_state.session_id = self._occupant_id
+
+        return lift_state
+
+    def get_status(self) -> LiftState:
+        lift_state = self._get_status()
+
+        if lift_state.current_mode == LiftState.MODE_AGV:
+            self._last_mode_agv_time = time.time()
+            return lift_state
+
+        if self._last_mode_agv_time + 30.0 < time.time():
+            # To induce RMF to send LiftRequest, hide with MODE_AGV
+            lift_state.current_mode = LiftState.MODE_AGV
+            return lift_state
 
         return lift_state
 
@@ -137,32 +243,72 @@ class RmfDoorContext(RmfContext):
     _lci_context: lci_client.LciDoorContext
     _is_door_open_asked: bool
 
+    """
+    LciContext does not automatically recover to connected status and emergency status unless sending a message.
+    To induce RMF to send DoorRequest, actual MODE_OFFLINE is to be hidden after enough duration 10s.
+    """
+    _last_mode_online_time: float
+
     def __init__(self, lci_context: lci_client.LciDoorContext, logger=None) -> None:
         super().__init__(lci_context, logger)
         self._is_door_open_asked = False
 
-    def get_status(self) -> DoorState:
+        self._last_mode_online_time = 0
+
+    def reset(self) -> None:
+        with self._lock:
+            super().reset()
+            self._is_door_open_asked = False
+
+    def _get_status(self) -> DoorState:
         door_state = DoorState()
         door_state.door_name = self._lci_context._topic_prefix
 
-        if self._lci_context._current_door == 0:
-            door_state.current_mode = DoorMode(value=DoorMode.MODE_CLOSED)
-        else:
-            door_state.current_mode = DoorMode(value=DoorMode.MODE_OPEN)
+        if not self._lci_context.is_connected():
+            door_state.current_mode.value = DoorMode.MODE_OFFLINE
+            return door_state
 
-        if not self._lci_context._is_registered:
+        if not self._lci_context.is_available():
+            door_state.current_mode.value = DoorMode.MODE_UNKNOWN
+            return door_state
+
+        if time.time() < self._lci_context._last_get_unregisterd_timestamp + 10.0:
+            """
+            Door and LCI require a deadtime for resetting sequence.
+            To surpress DoorRequest until the end of deadtime 10s, MODE_UNKNOWN is used instead of MODE_CLOSED.
+
+            This filter also works to force the interval of re-trial of sequence.
+            """
+            door_state.current_mode.value = DoorMode.MODE_UNKNOWN
+            return door_state
+
+        if not self._lci_context.is_registered():
             # current_mode must be masked as MODE_CLOSED
-            # because _lci_context._current_door is not updated when it is not registered
-            door_state.current_mode = DoorMode(value=DoorMode.MODE_CLOSED)
+            door_state.current_mode.value = DoorMode.MODE_CLOSED
+            return door_state
 
-        # door_state.current_mode will be overwritten with DoorMode.MODE_OFFLINE if _lci_client is not connected.
+        if self._lci_context._current_door == 0:
+            door_state.current_mode.value = DoorMode.MODE_CLOSED
+        else:
+            door_state.current_mode.value = DoorMode.MODE_OPEN
+
         # door_state.door_time shall be set with rclpy.Time
 
         return door_state
 
-    def reset(self) -> None:
-        super().reset()
-        self._is_door_open_asked = False
+    def get_status(self) -> DoorState:
+        door_state = self._get_status()
+
+        if door_state.current_mode.value not in [DoorMode.MODE_UNKNOWN, DoorMode.MODE_OFFLINE]:
+            self._last_mode_online_time = time.time()
+            return door_state
+
+        if self._last_mode_online_time + 10.0 < time.time():
+            # To induce RMF to send DoorRequest, hide with MODE_CLOSED
+            door_state.current_mode.value = DoorMode.MODE_CLOSED
+            return door_state
+
+        return door_state
 
     def is_door_open_asked(self) -> bool:
         return self._is_door_open_asked
@@ -263,44 +409,75 @@ class LciRmfAdapter(Node):
 
         # To send RequestElevatorStatus and RequestDoorStatus to LCI every 3 seconds when registered.
         self._sync_lci_status_timer = self.create_timer(
-            3.0, self._sync_lci_status)
+            2.0, self._sync_lci_status)
 
     def _publish_rmf_states(self):
         current_time = self.get_clock().now().to_msg()
-        is_connected = self._lci_client._mqtt_client.is_connected()
 
         for rl_context in self._lift_context_dict.values():
             lift_state = rl_context.get_status()
             lift_state.lift_name = lift_state.lift_name.replace(
                 '/', self._device_name_separater)
-
-            if not is_connected:
-                lift_state.current_mode = LiftState.MODE_OFFLINE
             lift_state.lift_time = current_time
-
             self._lift_state_pub.publish(lift_state)
 
         for rd_context in self._door_context_dict.values():
             door_state = rd_context.get_status()
             door_state.door_name = door_state.door_name.replace(
                 '/', self._device_name_separater)
-
-            if not is_connected:
-                door_state.current_mode = DoorMode(value=DoorMode.MODE_OFFLINE)
             door_state.door_time = current_time
-
             self._door_state_pub.publish(door_state)
+
+    def _sync_elevator_status(self, rl_context: RmfLiftContext) -> None:
+        rl_context._log_debug('[lra] RequestElevatorStatus, start')
+        ret = self._lci_client.do_request_elevator_status(
+            rl_context._lci_context)
+
+        if not ret:
+            rl_context._log_debug(
+                '[lra] RequestElevatorStatus, failed')
+            rl_context.reset()
+            return
+        rl_context._log_debug('[lra] RequestElevatorStatus, success')
+
+    def _sync_door_status(self, rd_context: RmfDoorContext) -> None:
+        rd_context._log_debug('[lra] RequestDoorStatus, start')
+        ret = self._lci_client.do_request_door_status(
+            rd_context._lci_context)
+
+        if not ret:
+            rd_context._log_debug('[lra] RequestDoorStatus, failed')
+            rd_context.reset()
+            return
+        rd_context._log_debug('[lra] RequestDoorStatus, success')
 
     def _sync_lci_status(self):
         for rl_context in self._lift_context_dict.values():
-            if rl_context._lci_context._is_registered:
-                self._lci_client.do_request_elevator_status(
-                    rl_context._lci_context)
+            if (rl_context._lci_context.is_registered() and not rl_context._under_resetting and
+                    rl_context._request_queue.empty() and not rl_context._in_request_proccessing.is_set()):
+                rl_context.put_request(
+                    self._sync_elevator_status, (rl_context,))
+
+            if rl_context._lci_context.is_registered() and rl_context._last_recv_request_time + 10.0 < time.time():
+                # RMF may be in hang. Timeout
+                rl_context._log_error(
+                    f'[lra, lift_req timeout] {rl_context.get_occupant()}')
+                self.reset_lift(rl_context)
 
         for rd_context in self._door_context_dict.values():
-            if rd_context._lci_context._is_registered:
-                self._lci_client.do_request_door_status(
-                    rd_context._lci_context)
+            if (rd_context._lci_context.is_registered() and not rd_context._under_resetting and
+                    rd_context._request_queue.empty() and not rd_context._in_request_proccessing.is_set()):
+                rd_context.put_request(
+                    self._sync_door_status, (rd_context,))
+
+            if rd_context._lci_context.is_registered() and rd_context._last_recv_request_time + 10.0 < time.time():
+                # RMF may be in hang. Timeout
+                rd_context._log_error(
+                    f'[lra, door_req timeout] {rd_context.get_occupant()}')
+                self.reset_door(rd_context)
+
+    ####
+    # Lift
 
     def _lift_request_callback(self, msg: LiftRequest) -> None:
         lift_name_key = msg.lift_name.replace(self._device_name_separater, '/')
@@ -309,20 +486,26 @@ class LciRmfAdapter(Node):
         if rl_context is None:
             return
 
+        lift_state = rl_context.get_status()
+        if lift_state.current_mode != LiftState.MODE_AGV:
+            # neglect LiftRequest unless it is ready state == MODE_AGV
+            return
+
         # session_id means the sender Node name
         if rl_context.get_occupant() == '':
             rl_context.set_occupant(msg.session_id)
 
         elif rl_context.get_occupant() != msg.session_id:
-            self.get_logger().warning(
-                f'[{msg.lift_name}] session_id mismatch: session is owned by {rl_context.get_occupant()} but requested from {msg.session_id}')
+            rl_context._log_warning(
+                f'[lra, lift_req, session_id mismatch] owned: {rl_context.get_occupant()}, req: {msg.session_id}')
             return
 
         match msg.request_type:
             case LiftRequest.REQUEST_END_SESSION:
+                # REQUEST_END_SESSION should be always accepted.
+                rl_context._log_info(
+                    '[lra, lift_req accepted] REQUEST_END_SESSION')
                 self.reset_lift(rl_context)
-                self.get_logger().info(
-                    f'[{msg.lift_name}] Release')
 
             case LiftRequest.REQUEST_AGV_MODE:
                 """
@@ -349,132 +532,197 @@ class LciRmfAdapter(Node):
                     case 1:
                         pass
                     case 2:
-                        if not rl_context._lci_context._is_registered and target_floor_list[0] == target_floor_list[1]:
-                            self.get_logger().error(
-                                f'[{msg.lift_name}] Format error of destination_floor ({msg.destination_floor}). <origination> and <destination> indicated the same floor.')
+                        if not rl_context._lci_context.is_registered() and target_floor_list[0] == target_floor_list[1]:
+                            rl_context._log_error(
+                                f'[lra, lift_req, format error] destination_floor: {msg.destination_floor}. <origination> and <destination> indicated the same floor.')
                             return
                     case _:
-                        self.get_logger().error(
-                            f'[{msg.lift_name}] Format error of destination_floor ({msg.destination_floor}). It must be <origination> for the 1st request, <destination> for the 2nd request or <origination>:<destination>.')
+                        rl_context._log_error(
+                            f'[lra, lift_req, format error] destination_floor: {msg.destination_floor}. It must be <origination> for the 1st request, <destination> for the 2nd request or <origination>:<destination>.')
                         return
 
                 for tf in target_floor_list:
                     if tf not in rl_context._rmf_floor_list:
-                        self.get_logger().error(
-                            f'[{msg.lift_name}] Invalid floor name {tf}. It is not in floor_list)')
+                        rl_context._log_error(
+                            f'[lra, lift_req, invalid floor name] {tf} is not in lift')
                         return
+
+                rl_context._last_recv_request_time = time.time()
 
                 if rl_context.get_destination_floor() == msg.destination_floor:
                     # Because RMF sends same LiftRequest in 1 Hz, lci-rmf-adapter has to neglect those redundant requests by checking whether LiftRequest.destination_floor changes.
                     return
 
-                if not rl_context._lci_context._is_registered:
+                # Set destination_floor to detect its change
+                rl_context.set_destination_floor(msg.destination_floor)
 
-                    if rl_context._lci_context.in_deadtime():
-                        self.get_logger().error(
-                            f'[{msg.lift_name}] LiftRequest was rejected due to deadtime after resetting of LCI or the lift.')
-                        return
+                if not rl_context._lci_context.is_registered():
 
-                    rl_context.set_destination_floor(msg.destination_floor)
-
-                    res = self._lci_client.do_registration(
-                        rl_context._lci_context)
-                    if not res or not rl_context._lci_context._is_registered:
-                        self.get_logger().warning(
-                            f'[{msg.lift_name}] Registration failed: {res}')
-                        return
-                    self.get_logger().info(
-                        f'[{msg.lift_name}] Registration')
-
-                else:
-                    rl_context.set_destination_floor(msg.destination_floor)
-
-                origination: Optional[str] = None
-                destination: Optional[str] = None
-
-                if rl_context._lci_context._target_floor == '':
-                    # 1st CallElevator when the robot may be out of the cage.
-
+                    # Registraiton and 1st CallElevator
                     if len(target_floor_list) == 2:
                         origination = target_floor_list[0]
                         destination = target_floor_list[1]
-                        self.get_logger().info(
-                            f'[{msg.lift_name}] 1st CallElevator: {origination} to {destination}')
-
                     else:
                         origination = target_floor_list[0]
-                        self.get_logger().info(
-                            f'[{msg.lift_name}] 1st CallElevator: {origination}')
+                        destination = None
+
+                    rl_context._log_info(
+                        '[lra, lift_req accepted] Registration, 1st CallElevator')
+                    self.register_and_call_lift(
+                        rl_context, origination, destination)
+                    return
 
                 else:
-                    # 2nd CallElevator when the robot may be in the cage.
-
-                    res = self._lci_client.do_robot_status(
-                        rl_context._lci_context,
-                        lci_client.RobotStatus.HAS_ENTERED)
-
-                    if not res:
-                        self.get_logger().error(
-                            f'[{msg.lift_name}] RobotStatus failed')
-                        self.reset_lift(rl_context)
-                        self.get_logger().info(
-                            f'[{msg.lift_name}] Release')
-                        return
+                    """
+                    Here, changing msg.destination_floor means the robot entered the lift and requests destination floor.
+                    That is, RobotStatus (HAS_ENTERED) and 2nd CallElevator are to be sent.
+                    """
 
                     if len(target_floor_list) == 2:
                         destination = target_floor_list[1]
                     else:
                         destination = target_floor_list[0]
 
-                    self.get_logger().info(
-                        f'[{msg.lift_name}] 2nd CallElevator: {destination}')
-
-                origination_door: Optional[int] = None
-                destination_door: Optional[int] = None
-
-                # decode door direction from floor_name
-                if origination is not None:
-                    if origination.endswith('_r'):
-                        origination_door = 2
-                        origination = origination[0:-2]
-                    else:
-                        origination_door = 1
-
-                if destination is not None:
-                    if destination.endswith('_r'):
-                        destination_door = 2
-                        destination = destination[0:-2]
-                    else:
-                        destination_door = 1
-
-                res = self._lci_client.do_call_elevator(
-                    rl_context._lci_context,
-                    origination, destination,
-                    origination_door, destination_door)
-                if not res:
-                    self.get_logger().error(
-                        f'[{msg.lift_name}] CallElevator failed')
-                    self.reset_lift(rl_context)
-                    self.get_logger().info(
-                        f'[{msg.lift_name}] Release')
+                    rl_context._log_info(
+                        '[lra, lift_req accepted] RobotStatus.HAS_ENTERED, 2nd CallElevator')
+                    self.enter_and_call_lift(rl_context, destination)
+                    return
 
             case _:
-                self.get_logger().warning(
-                    f'[{msg.lift_name}] request_type {msg.request_type} is not supported.')
+                rl_context._log_warning(
+                    f'[lra, lift_req, unsupported request_type] {msg.request_type}')
 
-    def reset_lift(self, rl_context: RmfLiftContext):
-        if rl_context._lci_context._is_registered:
-            # RMF Lift API does not have information where the robot is. Then, HAS_GOT_OFF used for LCI to reset.
-            # For resetting, no need to receive the corresponding response from LCI
-            self._lci_client.do_robot_status(
-                rl_context._lci_context,
-                lci_client.RobotStatus.HAS_GOT_OFF, False)
+    def _prepare_call_elevator_params(self, origination: str | None, destination: str | None) -> tuple[str | None, str | None, int | None, int | None]:
+        origination_door = None
+        destination_door = None
+
+        # decode door direction from floor_name
+        if origination is not None:
+            if origination.endswith('_r'):
+                origination_door = 2
+                origination = origination[0:-2]
+            else:
+                origination_door = 1
+
+        if destination is not None:
+            if destination.endswith('_r'):
+                destination_door = 2
+                destination = destination[0:-2]
+            else:
+                destination_door = 1
+        return origination, destination, origination_door, destination_door
+
+    def _register_and_call_lift(self, rl_context: RmfLiftContext, origination: str | None, destination: str | None) -> None:
+        rl_context._log_info('[lra] init sync by RequestElevatorStatus')
+        ret = self._lci_client.do_request_elevator_status(
+            rl_context._lci_context)
+
+        if ret:
+            # Previous session was alive. Release is needed.
+            rl_context._log_info(
+                '[lra] old session is alive. Release')
+            ret = self._lci_client.do_release(rl_context._lci_context)
+            if not ret:
+                rl_context._log_error('[lra] Release failed')
+                rl_context.reset()
+                return
+            rl_context._log_info('[lra] Old session is stopped.')
             time.sleep(1)
 
-            # For resetting, no need to receive the corresponding response from LCI
-            self._lci_client.do_release(rl_context._lci_context, False)
+        elif not rl_context._lci_context.is_connected():
+            # do_request_elevator_status() failed because MQTT was disconnected.
+            rl_context._log_error(
+                '[lra] init sync failed. no connection.')
+            rl_context.reset()
+            return
+
+        rl_context._log_debug('[lra] Registration, start')
+        rl_context._hide_door_open_state = True
+        ret = self._lci_client.do_registration(rl_context._lci_context)
+
+        if not ret:
+            rl_context._log_debug('[lra] Registration, failed')
+            rl_context.reset()
+            return
+        rl_context._log_debug('[lra] Registration, success')
+
+        origination, destination, origination_door, destination_door = self._prepare_call_elevator_params(
+            origination, destination)
+
+        rl_context._log_debug('[lra] 1st CallElevator, start')
+        ret = self._lci_client.do_call_elevator(
+            rl_context._lci_context,
+            origination, destination,
+            origination_door, destination_door)
+
+        if not ret:
+            rl_context._log_debug('[lra] 1st CallElevator, failed')
+            rl_context.reset()
+            return
+        rl_context._log_debug('[lra] 1st CallElevator, success')
+
+        # Hide door_open_state 2s after CallElevator to wait CarArrival and updated ElevatorStatus by RequestElevatorStatus
+        time.sleep(2)
+
+        self._sync_elevator_status(rl_context)
+        rl_context._hide_door_open_state = False
+
+    def register_and_call_lift(self, rl_context: RmfLiftContext, origination: str | None, destination: str | None) -> None:
+        rl_context.put_request(
+            target=self._register_and_call_lift, args=(rl_context, origination, destination))
+
+    def _enter_and_call_lift(self, rl_context: RmfLiftContext, destination: str | None) -> None:
+        rl_context._log_debug('[lra] RobotStatus.HAS_ENTERED, start')
+        ret = self._lci_client.do_robot_status(
+            rl_context._lci_context, lci_client.RobotStatus.HAS_ENTERED)
+
+        if not ret:
+            rl_context._log_debug('[lra] RobotStatus.HAS_ENTERED, failed')
+            rl_context.reset()
+            return
+        rl_context._log_debug('[lra] RobotStatus.HAS_ENTERED, success')
+
+        _, destination, _, destination_door = self._prepare_call_elevator_params(
+            None, destination)
+
+        rl_context._log_debug('[lra] 2nd CallElevator, start')
+        ret = self._lci_client.do_call_elevator(
+            rl_context._lci_context,
+            None, destination,
+            None, destination_door)
+
+        if not ret:
+            rl_context._log_debug('[lra] 2nd CallElevator, failed')
+            rl_context.reset()
+            return
+        rl_context._log_debug('[lra] 2nd CallElevator, success')
+
+    def enter_and_call_lift(self, rl_context: RmfLiftContext, destination: str | None) -> None:
+        rl_context.put_request(
+            target=self._enter_and_call_lift, args=(rl_context, destination))
+
+    def _reset_lift(self, rl_context: RmfLiftContext) -> None:
+        if rl_context._lci_context.is_registered():
+            rl_context._under_resetting = True
+
+            # RMF Lift API does not have information where the robot is. Then, HAS_GOT_OFF used for LCI to reset.
+
+            rl_context._log_debug('[lra] RobotStatus HAS_GOT_OFF')
+            self._lci_client.do_robot_status(
+                rl_context._lci_context,
+                lci_client.RobotStatus.HAS_GOT_OFF)
+            time.sleep(1)
+
+            rl_context._log_debug('[lra] Release')
+            self._lci_client.do_release(rl_context._lci_context)
 
         rl_context.reset()
+
+    def reset_lift(self, rl_context: RmfLiftContext) -> None:
+        rl_context.put_request(target=self._reset_lift, args=(rl_context,))
+
+    ####
+    # Door
 
     def _door_request_callback(self, msg: DoorRequest) -> None:
         door_name_key = msg.door_name.replace(self._device_name_separater, '/')
@@ -483,40 +731,32 @@ class LciRmfAdapter(Node):
         if rd_context is None:
             return
 
+        door_state = rd_context.get_status()
+        if door_state.current_mode.value in [DoorMode.MODE_UNKNOWN, DoorMode.MODE_OFFLINE]:
+            return
+
         # requester_id means the sender Node name
         if rd_context.get_occupant() == '':
             rd_context.set_occupant(msg.requester_id)
 
         elif rd_context.get_occupant() != msg.requester_id:
-            self.get_logger().warning(
-                f'[{msg.door_name}] requester_id mismatch: session is owned by {rd_context.get_occupant()} but requested from {msg.requester_id}')
+            rd_context._log_warning(
+                f'[lra, door_req, requester_id mismatch] owned: {rd_context.get_occupant()}, req: {msg.requester_id}')
             return
 
         match msg.requested_mode.value:
             case DoorMode.MODE_CLOSED:
+                rd_context._log_info('[lra, door_req accepted] MODE_CLOSED')
                 self.reset_door(rd_context)
-                self.get_logger().info(f'[{msg.door_name}] Release')
 
             case DoorMode.MODE_OPEN:
-                if not rd_context._lci_context._is_registered:
-
-                    if rd_context._lci_context.in_deadtime():
-                        self.get_logger().error(
-                            f'[{msg.door_name}] DoorRequest was rejected due to deadtime after resetting of LCI or the door.')
-                        return
-
-                    res = self._lci_client.do_registration(
-                        rd_context._lci_context)
-                    if not res or not rd_context._lci_context._is_registered:
-                        self.get_logger().warning(
-                            f'[{msg.door_name}] Registration failed: {res}')
-                        return
-                    self.get_logger().info(
-                        f'[{msg.door_name}] Registration')
+                rd_context._last_recv_request_time = time.time()
 
                 if rd_context.is_door_open_asked():
                     # LCI do not need multiple OpenDoor command because LCI holds the request of OpenDoor as an internal state.
                     return
+
+                rd_context.set_door_open_asked(True)
 
                 direction = None
                 if rd_context._lci_context._door_type == 'flap':
@@ -531,21 +771,54 @@ class LciRmfAdapter(Node):
                     # direciton: 2 means the leaving direction
                     # direction = 2
 
-                res = self._lci_client.do_open_door(
-                    rd_context._lci_context, direction)
-                if not res:
-                    self.get_logger().error(
-                        f'[{msg.door_name}] OpenDoor failed')
-                    self.reset_door(rd_context)
+                if not rd_context._lci_context.is_registered():
+                    self.register_and_open_door(rd_context, direction)
                     return
-                rd_context.set_door_open_asked(True)
-                self.get_logger().info(f'[{msg.door_name}] OpenDoor')
 
-    def reset_door(self, rd_context: RmfDoorContext):
-        if rd_context._lci_context._is_registered:
-            # For resetting, no need to receive the corresponding response from LCI
-            self._lci_client.do_release(rd_context._lci_context, False)
+            case _:
+                rd_context._log_warning(
+                    f'[lra, door_req, unsupported requested_mode] {msg.requested_mode.value}')
+
+    def _register_and_open_door(self, rd_context: RmfDoorContext, direction: int | None) -> None:
+        # There is no problem when the previous session is alive for doors.
+
+        rd_context._log_debug('[lra] Registration, start')
+
+        ret = self._lci_client.do_registration(
+            rd_context._lci_context)
+
+        if not ret:
+            rd_context._log_debug('[lra] Registration, failed')
+            rd_context.reset()
+            return
+        rd_context._log_debug('[lra] Registration, success')
+
+        rd_context._log_debug('[lra] OpenDoor, start')
+
+        ret = self._lci_client.do_open_door(
+            rd_context._lci_context, direction)
+
+        if not ret:
+            rd_context._log_debug('[lra] OpenDoor, failed')
+            rd_context.reset()
+            return
+        rd_context._log_debug('[lra] OpenDoor, success')
+
+    def register_and_open_door(self, rd_context: RmfDoorContext, direction: int | None) -> None:
+        rd_context.put_request(
+            target=self._register_and_open_door, args=(rd_context, direction))
+
+    def _reset_door(self, rd_context: RmfDoorContext) -> None:
+        if rd_context._lci_context.is_registered():
+            rd_context._under_resetting = True
+
+            rd_context._log_debug('[lra] Release')
+            self._lci_client.do_release(rd_context._lci_context)
+
         rd_context.reset()
+
+    def reset_door(self, rd_context: RmfDoorContext) -> None:
+        rd_context.put_request(target=self._reset_door, args=(rd_context,))
 
 
 def main(args=None):
