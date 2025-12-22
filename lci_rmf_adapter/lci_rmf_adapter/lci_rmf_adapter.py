@@ -780,7 +780,28 @@ class LciRmfAdapter(Node):
                     f'[lra, door_req, unsupported requested_mode] {msg.requested_mode.value}')
 
     def _register_and_open_door(self, rd_context: RmfDoorContext, direction: int | None) -> None:
-        # There is no problem when the previous session is alive for doors.
+        rd_context._log_info('[lra] init sync by RequestDoorStatus')
+        ret = self._lci_client.do_request_door_status(
+            rd_context._lci_context)
+
+        if ret:
+            # Previous session was alive. Release is needed.
+            rd_context._log_info(
+                '[lra] old session is alive. Release')
+            ret = self._lci_client.do_release(rd_context._lci_context)
+            if not ret:
+                rd_context._log_error('[lra] Release failed')
+                rd_context.reset()
+                return
+            rd_context._log_info('[lra] Old session is stopped.')
+            time.sleep(1)
+
+        elif not rd_context._lci_context.is_connected():
+            # do_request_elevator_status() failed because MQTT was disconnected.
+            rd_context._log_error(
+                '[lra] init sync failed. no connection.')
+            rd_context.reset()
+            return
 
         rd_context._log_debug('[lra] Registration, start')
 

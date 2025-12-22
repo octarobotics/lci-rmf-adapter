@@ -65,6 +65,9 @@ class LciRmfAdapterDoorTest(Node):
         with self._door_state_lock:
             self._door_state = msg
 
+        self.get_logger().info(
+            f'[{self._door_name}] [current_mode] {self._door_state.current_mode.value}')
+
     def request_door(self, open_close: bool):
         msg = DoorRequest()
         msg.door_name = self._door_name

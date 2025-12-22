@@ -579,11 +579,11 @@ class LciClient:
                     mqtt.CallbackAPIVersion.VERSION1,
                     protocol=mqtt.MQTTv311,
                     client_id=self._robot_id,
-                    userdata=self)
+                    userdata=self, clean_session=False)
             else:
                 self._mqtt_client = mqtt.Client(
                     client_id=self._robot_id,
-                    protocol=mqtt.MQTTv311, userdata=self)
+                    protocol=mqtt.MQTTv311, userdata=self, clean_session=False)
 
             if cert_dir != None:
                 try:
@@ -604,10 +604,12 @@ class LciClient:
             self._mqtt_client.on_connect = self._on_connect
             self._mqtt_client.on_message = self._on_message
             self._mqtt_client.on_disconnect = self._on_disconnect
+
             # self.mqtt_client.enable_logger(self.logger)
+            # self._mqtt_client.on_log = lambda c, u, l, b: print(b)
 
             # MQTT connection should be maintained.
-            self._mqtt_client.reconnect_delay_set(min_delay=1, max_delay=10)
+            self._mqtt_client.reconnect_delay_set(min_delay=1, max_delay=5)
 
             self._mqtt_client.connect(
                 str(self._mqtt_server), port=mqtt_port)
@@ -679,6 +681,10 @@ class LciClient:
         # returns response payload from LCI
         # If wait_response is False, this function always returns None
 
+        if not self._mqtt_client.is_connected():
+            self._logger.error(f'[{context._topic_prefix}]   [mq_send, not connected] {api}, {payload}')  # noqa
+            return None
+
         topic = f'{context._topic_prefix}/{api}/{self._robot_id}'
         timestamp = int(time.time() * 1000)/1000
 
@@ -739,6 +745,15 @@ class LciClient:
                 if wait_response:
                     # Clean up Event from context
                     context.remove_response_event(api, timestamp)
+
+                try:
+                    self._mqtt_client.disconnect()
+                    # refresh socket
+                    # reconnect() is to be automaticlally and repeatedly called in loop_forever the worker thread started by loop_start().
+                    self._mqtt_client.reconnect()
+                except Exception as e:
+                    self._logger.warning(
+                        f'[{context._topic_prefix}]   [mq_reconnect, exception] {e}')
 
                 return None
 
