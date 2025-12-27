@@ -126,10 +126,10 @@ class LciContext(ABC):
     # OpenRMF will send LiftRequest/DoorRequest before receiving LiftState/DoorState with the error code and consective error handlilng.
 
     _is_connected: bool
-    _last_get_disconnected_timestamp: float
+    _last_disconnected_timestamp: float
 
     _is_available: bool
-    _last_get_unavailable_timestamp: float
+    _last_unavailable_timestamp: float
 
     _is_registered: bool
     _last_get_unregisterd_timestamp: float
@@ -147,10 +147,10 @@ class LciContext(ABC):
         self._response_event_pool = {}
 
         self._is_connected = False
-        self._last_get_disconnected_timestamp = 0
+        self._last_disconnected_timestamp = 0
 
         self._is_available = False
-        self._last_get_unavailable_timestamp = 0
+        self._last_unavailable_timestamp = 0
 
         self._is_registered = False
         self._last_get_unregisterd_timestamp = 0
@@ -162,21 +162,23 @@ class LciContext(ABC):
     def get_device_type(self) -> DeviceType:
         return self._device_type
 
-    def register_response_event(self, api: str, requested_timestamp: float, response_event: LciResponseEvent) -> None:
+    def create_response_event(self, api: str, requested_timestamp: float) -> LciResponseEvent:
         # Called by the master thread
-
+        response_event = LciResponseEvent()
         with self._context_lock:
             self._response_event_pool.update({
                 (api, requested_timestamp): response_event
             })
+        return response_event
 
-    def remove_response_event(self, api: str,  requested_timestamp: float) -> None:
+    def remove_response_event(self, api: str, requested_timestamp: float) -> None:
         with self._context_lock:
             res_event = self._response_event_pool.pop(
-                (api, requested_timestamp))
+                (api, requested_timestamp), None)
 
             # To avoid waiting forever, it is needed to notify the called thread.
-            res_event.set(None)
+            if res_event is not None:
+                res_event.set(None)
 
     def msg_callback(self, response_api: str, res_payload: dict) -> None:
         # Called by the MQTT receiving thread to wake up the master thread
@@ -203,15 +205,8 @@ class LciContext(ABC):
         except:
             return None
 
-    def proc_response_payload(self, api: str, res_payload: dict | None) -> bool:
+    def proc_response_payload(self, api: str, res_payload: dict) -> bool:
         # Check and process response payload to change internal state and log.
-
-        if res_payload is None:
-            # This timeout may be because LCI server or device are not reachable.
-            self.set_connected(False)
-            self._logger.error(
-                f'[{self._topic_prefix}] [lci, {api}, res: timeout]')
-            return False
 
         # Response from LCI device == LCI is connected.
         self.set_connected(True)
@@ -279,20 +274,18 @@ class LciContext(ABC):
 
     def set_connected(self, on_off: bool) -> None:
         with self._context_lock:
-            if self._is_connected and not on_off:  # falling edge
-                self._last_get_disconnected_timestamp = time.time()
-
+            if not on_off:
                 # If disconnected, synchronization with LCI is disrupted.
                 # Reset and wait for recovery.
+                self._last_disconnected_timestamp = time.time()
                 self.set_available(False)
 
             self._is_connected = on_off
 
     def set_available(self, on_off: bool) -> None:
         with self._context_lock:
-            if self._is_available and not on_off:  # falling edge
-                self._last_get_unavailable_timestamp = time.time()
-
+            if not on_off:
+                self._last_unavailable_timestamp = time.time()
                 self.set_registered(False)
 
             self._is_available = on_off
@@ -398,7 +391,7 @@ class LciElevatorContext(LciContext):
             self._current_floor = current_floor
             self._current_door = current_door
 
-    def proc_response_payload(self, api: str, res_payload: dict | None) -> bool:
+    def proc_response_payload(self, api: str, res_payload: dict) -> bool:
         ret = super().proc_response_payload(api, res_payload)
 
         if res_payload is None or not ret:
@@ -468,7 +461,7 @@ class LciDoorContext(LciContext):
             self._current_door = 0
             self._current_lock = 1
 
-    def proc_response_payload(self, api: str, res_payload: dict | None) -> bool:
+    def proc_response_payload(self, api: str, res_payload: dict) -> bool:
         ret = super().proc_response_payload(api, res_payload)
 
         if res_payload is None or not ret:
@@ -696,9 +689,7 @@ class LciClient:
 
         # To wait with timeout, LciResponseEvent (similar class to threading.Event) is registered to context.
         if wait_response:
-            response_event = LciResponseEvent()
-            context.register_response_event(
-                api, timestamp, response_event)
+            response_event = context.create_response_event(api, timestamp)
 
         with self._publish_lock:
             try:
@@ -712,40 +703,10 @@ class LciClient:
         # Wait for completion of publish()
         start_time = time.time()
         while True:
-            try:
-                # When the state is disconnection, wait_for_publish() will return soon with Exception
-                pub_info.wait_for_publish(timeout=0.2)
-
-            except Exception:
-                time.sleep(0.2)
-                continue
-
-            if pub_info.is_published():
-                # Elapsed time between PUB and PUBACK
-                self._logger.info(f'[{context._topic_prefix}]   [mq_send ({time.time()-start_time:.03f})] {api}, {payload}')  # noqa
-
-                if not wait_response:
-                    return None
-
-                # Wait for receiving response from LCI
-                start_time = time.time()
-                res_payload = response_event.wait(timeout_sec)
-                if res_payload is not None:
-                    # Elapsed time between LCI's request and response
-                    self._logger.info(f'[{context._topic_prefix}]   [mq_recv ({time.time()-start_time:.03f})] {api}, {res_payload}')  # noqa
-                else:
-                    self._logger.error(f'[{context._topic_prefix}]   [mq_recv, timeout ({time.time()-start_time:.03f})] {api}')  # noqa
-                return res_payload
-
-            elif start_time + 5.0 < time.time():
+            if start_time + 5.0 < time.time():
                 # When publish() does not finish for 5 s, it should be considered disconnected.
-
                 self._logger.error(f'[{context._topic_prefix}]   [mq_send, timeout ({time.time()-start_time:.03f})] {api}, {payload}')  # noqa
-
-                if wait_response:
-                    # Clean up Event from context
-                    context.remove_response_event(api, timestamp)
-
+                context.remove_response_event(api, timestamp)
                 try:
                     self._mqtt_client.disconnect()
                     # refresh socket
@@ -757,6 +718,67 @@ class LciClient:
 
                 return None
 
+            try:
+                # When the state is disconnection, wait_for_publish() will return soon with Exception
+                pub_info.wait_for_publish(timeout=0.2)
+
+                if pub_info.is_published():
+                    # Elapsed time between PUB and PUBACK
+                    self._logger.info(f'[{context._topic_prefix}]   [mq_send ({time.time()-start_time:.03f})] {api}, {payload}')  # noqa
+                    break
+
+            except Exception:
+                time.sleep(0.2)
+                continue
+
+        if not wait_response:
+            return None
+
+        # Wait for receiving response from LCI
+        start_time = time.time()
+        res_payload = response_event.wait(timeout_sec)
+        if res_payload is not None:
+            # Elapsed time between LCI's request and response
+            self._logger.info(f'[{context._topic_prefix}]   [mq_recv ({time.time()-start_time:.03f})] {api}, {res_payload}')  # noqa
+        else:
+            self._logger.error(f'[{context._topic_prefix}]   [mq_recv, timeout ({time.time()-start_time:.03f})] {api}')  # noqa
+        return res_payload
+
+    def _sync_execute_with_retry(self, context: LciContext, api: str, payload: dict,
+                                 response_timeout_sec: float, wait_response: bool,
+                                 max_retry_num: int, retry_interval_sec: float) -> bool:
+        # Retry until successfully receiving reponse from LCI devices or the specified number of retry.
+        for i in range(max_retry_num):
+            res_payload = self._publish(
+                context, api, payload, response_timeout_sec, wait_response)
+            if res_payload is None:
+                self._logger.warning(
+                    f'[{context._topic_prefix}] [lci, {api}, failed ({i+1}/{max_retry_num})]')
+
+                if i + 1 < max_retry_num:
+                    time.sleep(retry_interval_sec)
+                continue
+
+            if api == 'Registration':
+                # To retry, hook RegistrationResult in the case that another robot uses the lift.
+
+                result_code = context._get_result_code(res_payload)
+                if result_code is not ResultCode.SUCCESS:
+                    self._logger.warning(
+                        f'[{context._topic_prefix}] [lci, {api}, failed ({i+1}/{max_retry_num})] {result_code}')
+
+                    if i + 1 < max_retry_num:
+                        time.sleep(retry_interval_sec)
+                    continue
+
+            return context.proc_response_payload(api, res_payload)
+
+        # This timeout may be because LCI server or device are not reachable.
+        context.set_connected(False)
+        self._logger.error(
+            f'[{context._topic_prefix}] [lci, {api}, res: timeout]')
+        return False
+
     def do_registration(self, context: LciContext, dry_run: bool = False) -> bool:
         # When return False, this funciton should be retried.
 
@@ -765,17 +787,20 @@ class LciClient:
         else:
             payload = {}
 
-        res_payload = self._publish(context, 'Registration', payload, 185)
-        return context.proc_response_payload('Registration', res_payload)
+        # max_retry_num: 7 with retry_interval_sec: 30 means 210s in total. It is enough time to wait for Release by another robot.
+        return self._sync_execute_with_retry(context, 'Registration', payload,
+                                             response_timeout_sec=185, wait_response=True,
+                                             max_retry_num=6, retry_interval_sec=30)
 
     def do_release(self, context: LciContext, wait_response: bool = True) -> bool:
-        res_payload = self._publish(context, 'Release', {}, 20, wait_response)
-        return context.proc_response_payload('Release', res_payload)
+        return self._sync_execute_with_retry(context, 'Release', {},
+                                             response_timeout_sec=10, wait_response=wait_response,
+                                             max_retry_num=3, retry_interval_sec=5)
 
     def do_robot_status(self, context: LciContext, robot_status: RobotStatus, wait_response: bool = True) -> bool:
-        res_payload = self._publish(context, 'RobotStatus',
-                                    {'state': robot_status.value}, 20, wait_response)
-        return context.proc_response_payload('RobotStatus', res_payload)
+        return self._sync_execute_with_retry(context, 'RobotStatus', {'state': robot_status.value},
+                                             response_timeout_sec=10, wait_response=wait_response,
+                                             max_retry_num=3, retry_interval_sec=5)
 
     def do_call_elevator(self, context: LciElevatorContext,
                          origination: Optional[str], destination: Optional[str],
@@ -811,25 +836,29 @@ class LciClient:
                 'destination_door': destination_door
             })
 
-        res_payload = self._publish(context, 'CallElevator', payload, 20)
-        return context.proc_response_payload('CallElevator', res_payload)
+        return self._sync_execute_with_retry(context, 'CallElevator', payload,
+                                             response_timeout_sec=10, wait_response=True,
+                                             max_retry_num=3, retry_interval_sec=5)
 
     def do_request_elevator_status(self, context: LciElevatorContext) -> bool:
-        res_payload = self._publish(context, 'RequestElevatorStatus', {}, 10)
-        return context.proc_response_payload('RequestElevatorStatus', res_payload)
+        return self._sync_execute_with_retry(context, 'RequestElevatorStatus', {},
+                                             response_timeout_sec=5, wait_response=True,
+                                             max_retry_num=1, retry_interval_sec=2)
 
     def do_open_door(self, context: LciDoorContext, direction: Optional[int] = None) -> bool:
-        if context._door_type == 'flap' and direction is not None:
-            res_payload = self._publish(
-                context, 'OpenDoor', {'direction': direction}, 20)
-        else:
-            res_payload = self._publish(context, 'OpenDoor', {}, 20)
+        payload = {}
 
-        return context.proc_response_payload('OpenDoor', res_payload)
+        if context._door_type == 'flap' and direction is not None:
+            payload = {'direction': direction}
+
+        return self._sync_execute_with_retry(context, 'OpenDoor', payload,
+                                             response_timeout_sec=10, wait_response=True,
+                                             max_retry_num=3, retry_interval_sec=5)
 
     def do_request_door_status(self, context: LciDoorContext) -> bool:
-        res_payload = self._publish(context, 'RequestDoorStatus', {}, 10)
-        return context.proc_response_payload('RequestDoorStatus', res_payload)
+        return self._sync_execute_with_retry(context, 'RequestDoorStatus', {},
+                                             response_timeout_sec=5, wait_response=True,
+                                             max_retry_num=1, retry_interval_sec=2)
 
 
 # Main routine

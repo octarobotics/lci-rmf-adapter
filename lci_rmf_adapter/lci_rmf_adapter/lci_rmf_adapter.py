@@ -118,6 +118,15 @@ class RmfContext(ABC):
     def get_status(self) -> LiftState | DoorState:
         pass
 
+    def need_to_hide_offline_mode(self, deadtime: float) -> bool:
+        """
+        LciContext does not automatically recover to connected status and emergency status unless sending a message.
+        To induce RMF to send LiftRequest or DoorRequest, actual MODE_OFFLINE and MODE_EMERGENCY are to be hidden by MODE_AGV or MODE_CLOSED after enough duration.
+        """
+        current_time = time.time()
+        return ((not self._lci_context.is_connected() and self._lci_context._last_disconnected_timestamp + deadtime < current_time) or
+                (not self._lci_context.is_available() and self._lci_context._last_unavailable_timestamp + deadtime < current_time))
+
 
 class RmfLiftContext(RmfContext):
     _lci_context: lci_client.LciElevatorContext
@@ -125,12 +134,6 @@ class RmfLiftContext(RmfContext):
 
     # buffer to neglect mutiple same LiftRequest
     _destination_floor: str
-
-    """
-    LciContext does not automatically recover to connected status and emergency status unless sending a message.
-    To induce RMF to send LiftRequest, actual MODE_OFFLINE and MODE_EMERGENCY are to be hidden by MODE_AGV after enough duration 30s.
-    """
-    _last_mode_agv_time: float
 
     # Flag to disguise door_open_state to be closed for any reason
     _hide_door_open_state: bool
@@ -147,8 +150,6 @@ class RmfLiftContext(RmfContext):
                 self._rmf_floor_list.append(f'{f.floor_name}_r')
 
         self._destination_floor = ''
-
-        self._last_mode_agv_time = 0
 
         self._hide_door_open_state = False
 
@@ -227,14 +228,9 @@ class RmfLiftContext(RmfContext):
     def get_status(self) -> LiftState:
         lift_state = self._get_status()
 
-        if lift_state.current_mode == LiftState.MODE_AGV:
-            self._last_mode_agv_time = time.time()
-            return lift_state
-
-        if self._last_mode_agv_time + 30.0 < time.time():
+        if self.need_to_hide_offline_mode(30.0):
             # To induce RMF to send LiftRequest, hide with MODE_AGV
             lift_state.current_mode = LiftState.MODE_AGV
-            return lift_state
 
         return lift_state
 
@@ -243,17 +239,9 @@ class RmfDoorContext(RmfContext):
     _lci_context: lci_client.LciDoorContext
     _is_door_open_asked: bool
 
-    """
-    LciContext does not automatically recover to connected status and emergency status unless sending a message.
-    To induce RMF to send DoorRequest, actual MODE_OFFLINE is to be hidden after enough duration 10s.
-    """
-    _last_mode_online_time: float
-
     def __init__(self, lci_context: lci_client.LciDoorContext, logger=None) -> None:
         super().__init__(lci_context, logger)
         self._is_door_open_asked = False
-
-        self._last_mode_online_time = 0
 
     def reset(self) -> None:
         with self._lock:
@@ -299,14 +287,9 @@ class RmfDoorContext(RmfContext):
     def get_status(self) -> DoorState:
         door_state = self._get_status()
 
-        if door_state.current_mode.value not in [DoorMode.MODE_UNKNOWN, DoorMode.MODE_OFFLINE]:
-            self._last_mode_online_time = time.time()
-            return door_state
-
-        if self._last_mode_online_time + 10.0 < time.time():
+        if self.need_to_hide_offline_mode(10.0):
             # To induce RMF to send DoorRequest, hide with MODE_CLOSED
             door_state.current_mode.value = DoorMode.MODE_CLOSED
-            return door_state
 
         return door_state
 
@@ -627,7 +610,7 @@ class LciRmfAdapter(Node):
                 rl_context.reset()
                 return
             rl_context._log_info('[lra] Old session is stopped.')
-            time.sleep(1)
+            time.sleep(5)
 
         elif not rl_context._lci_context.is_connected():
             # do_request_elevator_status() failed because MQTT was disconnected.
@@ -794,7 +777,7 @@ class LciRmfAdapter(Node):
                 rd_context.reset()
                 return
             rd_context._log_info('[lra] Old session is stopped.')
-            time.sleep(1)
+            time.sleep(5)
 
         elif not rd_context._lci_context.is_connected():
             # do_request_elevator_status() failed because MQTT was disconnected.
