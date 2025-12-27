@@ -166,7 +166,7 @@ class RmfLiftContext(RmfContext):
             x.floor_name for x in self._lci_context._floor_list]
 
         lift_state.available_modes = [
-            LiftState.MODE_OFFLINE, LiftState.MODE_AGV, LiftState.MODE_EMERGENCY]
+            LiftState.MODE_OFFLINE, LiftState.MODE_AGV, LiftState.MODE_EMERGENCY, LiftState.MODE_UNKNOWN]
 
         if not self._lci_context.is_connected():
             lift_state.current_mode = LiftState.MODE_OFFLINE
