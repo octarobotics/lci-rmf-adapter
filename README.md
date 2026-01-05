@@ -98,6 +98,49 @@ To use lci_rmf_adapter quickly, it is recommended to use Docker.
   - It will start the Node of lci_rmf_adapter.
 
 
+# Error management
+
+To help RMF to manage errors releated to lifts and doors, lci_rmf_adapter uses `LiftState.current_mode` and `DoorState.current_mode` as,
+
+ | `LiftState.current_mode` | Description                                          |
+ | ------------------------ | ---------------------------------------------------- |
+ | `MODE_AGV`               | LCI device for the lift is online                    |
+ | `MODE_OFFLINE`           | LCI device for the lift is not reachable             |
+ | `MODE_EMERGENCY`         | The lift is not available due to emergency situation |
+ | `MODE_UNKNOWN`           | In the deadtime after use                            |
+
+
+ | `DoorState.current_mode` | Description                                                                               |
+ | ------------------------ | ----------------------------------------------------------------------------------------- |
+ | `MODE_CLOSED`            | LCI device for the door is online or the door is not available due to emergency situation |
+ | `MODE_OPEN`              | The door is completely opened and a robot can go through it                               |
+ | `MODE_OFFLINE`           | LCI device for the door is not reachable                                                  |
+ | `MODE_UNKNOWN`           | In the deadtime after use                                                                 |
+
+
+
+LCI's Elevator API and Door API are syncronous protocol based on MQTT, the asynchronous messaging protocol. lci_rmf_adapter applys appropriate retry and timeout both for LCI layer and MQTT layer. 
+
+In `_publish()` of [lci_client.py](./lci_rmf_adapter/lci_rmf_adapter/lci_client.py),
+- Timeout to receive PUBACK for the message. Timeout duration is fixed with 5s. Retry is managed by paho-mqtt.
+- Timeout to receive the response from LCI devices. Timeout durations are set by `_sync_execute_with_retry()` with the maximum number of retry as,
+
+ | LCI's command name    | Timeout duration | Max # of retry | Retry interval |
+ | --------------------- | ---------------- | -------------- | -------------- |
+ | Regsitration          | 180s             | 5              | 30             |
+ | CallElevator          | 10s              | 2              | 5              |
+ | RequestElevatorStatus | 5s               | 0              | -              |
+ | RobotStatus           | 10s              | 2              | 5              |
+ | Release               | 10s              | 2              | 5              |
+ 
+If any command failed after the specified retries, lci_rmf_adapter sets its mode and publish `LiftState.current_mode` and `DoorState.current_mode` with `MODE_OFFLINE`. In the same manner, once a response from LCI indicates emergency, lci_rmf_adapter uses `MODE_EMERGENCY` for lifts and `MODE_UNKNOWN` for doors.
+
+After a specific duration, `MODE_OFFLINE`, `MODE_EMERGENCY` and `MODE_UNKNOWN` will be overrided by `MODE_AGV` or `MODE_CLOSED` to inform "pseudo-online" to induce RMF to send LiftRequest or DoorRequest.
+
+After use of a lift or a door, their internal states will get unstable for several seconds for resetting. To assure this pereiod, lci_rmf_adapter uses `MODE_UNKNOWN` until 10s passed after usage.
+
+RMF and its peripheral module shall manage these errors to assure safe operations.
+
 
 # Client examples
 ## For Lift

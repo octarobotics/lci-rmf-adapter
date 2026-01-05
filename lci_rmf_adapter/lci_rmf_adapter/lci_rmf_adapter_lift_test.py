@@ -76,6 +76,9 @@ class LciRmfAdapterLiftTest(Node):
         with self._lift_state_lock:
             self._lift_state = msg
 
+        self.get_logger().info(
+            f'[{self._lift_name}] [current_mode] {self._lift_state.current_mode}')
+
     def request_lift(self, destination_floor: str):
         msg = LiftRequest()
         msg.lift_name = self._lift_name
