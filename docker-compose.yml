@@ -24,7 +24,10 @@ services:
     container_name: lci_rmf_adapter
     privileged: true
     tty: true
-    command: bash
+    command: >
+      bash -c '
+      [ -n "$$RUN_ON_START" ] && bash start.sh || exec bash
+      '
     restart: always
     network_mode: host
     ipc: host
@@ -34,6 +37,7 @@ services:
     environment:
       CYCLONEDDS_URI: file:///root/cyclonedds.xml
       ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}
+      RUN_ON_START: ${RUN_ON_START:-}
     volumes:
       - type: bind
         source: ${DDS_CONFIG:-cyclonedds.xml.default}

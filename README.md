@@ -96,6 +96,7 @@ To use lci_rmf_adapter quickly, it is recommended to use Docker.
   - It will login you in the container environment.
 - `./start.sh`
   - It will start the Node of lci_rmf_adapter.
+- To automatically run `./start.sh` by `sudo -E ./container_manager.sh start`, `export RUN_ON_START=true` in advance.
 
 
 # Error management
