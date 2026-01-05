@@ -102,20 +102,20 @@ To use lci_rmf_adapter quickly, it is recommended to use Docker.
 
 To help RMF to manage errors releated to lifts and doors, lci_rmf_adapter uses `LiftState.current_mode` and `DoorState.current_mode` as,
 
- |                          | Mode             | Description                                          |
- | ------------------------ | ---------------- | ---------------------------------------------------- |
- | `LiftState.current_mode` | `MODE_AGV`       | LCI device for the lift is online                    |
- |                          | `MODE_OFFLINE`   | LCI device for the lift is not reachable             |
- |                          | `MODE_EMERGENCY` | The lift is not available due to emergency situation |
- |                          | `MODE_UNKNOWN`   | In the deadtime after use                            |
+ | `LiftState.current_mode` | Description                                          |
+ | ------------------------ | ---------------------------------------------------- |
+ | `MODE_AGV`               | LCI device for the lift is online                    |
+ | `MODE_OFFLINE`           | LCI device for the lift is not reachable             |
+ | `MODE_EMERGENCY`         | The lift is not available due to emergency situation |
+ | `MODE_UNKNOWN`           | In the deadtime after use                            |
 
 
- |                          | Mode           | Description                                                                               |
- | ------------------------ | -------------- | ----------------------------------------------------------------------------------------- |
- | `DoorState.current_mode` | `MODE_CLOSED`  | LCI device for the door is online or the door is not available due to emergency situation |
- |                          | `MODE_OPEN`    | The door is completely opened and a robot can go through it                               |
- |                          | `MODE_OFFLINE` | LCI device for the door is not reachable                                                  |
- |                          | `MODE_UNKNOWN` | In the deadtime after use                                                                 |
+ | `DoorState.current_mode` | Description                                                                               |
+ | ------------------------ | ----------------------------------------------------------------------------------------- |
+ | `MODE_CLOSED`            | LCI device for the door is online or the door is not available due to emergency situation |
+ | `MODE_OPEN`              | The door is completely opened and a robot can go through it                               |
+ | `MODE_OFFLINE`           | LCI device for the door is not reachable                                                  |
+ | `MODE_UNKNOWN`           | In the deadtime after use                                                                 |
 
 
 
