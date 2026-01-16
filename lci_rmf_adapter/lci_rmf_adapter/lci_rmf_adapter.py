@@ -5,6 +5,7 @@ from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 from rmf_lift_msgs.msg import LiftState, LiftRequest
 from rmf_door_msgs.msg import DoorState, DoorRequest, DoorMode
+from std_msgs.msg import Bool
 from rcl_interfaces.msg import ParameterDescriptor
 from rclpy.publisher import Publisher
 
@@ -308,6 +309,7 @@ class LciRmfAdapter(Node):
 
     _lift_state_pub: Publisher
     _door_state_pub: Publisher
+    _fire_alarm_pub: Publisher
 
     _device_name_separater: str
 
@@ -337,6 +339,7 @@ class LciRmfAdapter(Node):
         self._lci_client.initialize(server_config_file, cert_dir)
 
         lci_context_dict = self._lci_client.get_contexts()
+        lci_alarm_context_dict = self._lci_client.get_alarm_contexts()
 
         self._lift_context_dict = {}
         self._door_context_dict = {}
@@ -348,6 +351,27 @@ class LciRmfAdapter(Node):
             elif isinstance(l_context, lci_client.LciDoorContext):
                 self._door_context_dict.update(
                     {name: RmfDoorContext(l_context, self.get_logger())})
+
+        def publish_fire_alarm(alarm_type: str, area_id: str, alarm_state: bool):
+            if not alarm_state:
+                # If "false" is published to "/fire_alarm_trigger", RMF resumes the tasks suspended by the first alarm.
+                # This behavior is not safe especially when emergency situation.
+                # Robot systems should resume only after human surveillance on the emergency situation.
+                # Then, the human should manually send "false" by other means such as "rmf-web".
+                # That is why the cancel signal is never published by LCI RFM Adapter.
+                return
+
+            if alarm_type != 'fire_alarm':
+                return
+
+            msg = Bool()
+            msg.data = True
+            self._fire_alarm_pub.publish(msg)
+            self.get_logger().info(f'[/fire_alarm_trigger] {area_id}')
+
+        for al_context in lci_alarm_context_dict.values():
+            # set callbacks to publish fire_alarm
+            al_context.alarm_callback = publish_fire_alarm
 
         self._lci_client.start()
 
@@ -368,6 +392,12 @@ class LciRmfAdapter(Node):
         self._door_state_pub = self.create_publisher(
             DoorState,
             'door_states',
+            qos_profile=state_qos_profile)
+
+        # To publish fire alarm to RMF
+        self._fire_alarm_pub = self.create_publisher(
+            Bool,
+            'fire_alarm_trigger',
             qos_profile=state_qos_profile)
 
         # Subscribe lift requests from RMF

@@ -1,22 +1,24 @@
 # lci_rmf_adapter (RMF Lift and Door Adapter for LCI)
 This package is an implementation of RMF Lift Adapter[^1] and Door Adapter[^2] for LCI.
 
-LCI is the cloud-based service provided by Octa Robotics, Inc[^3] .
+LCI is the cloud-based service provided by Octa Robotics, Inc[^3].
 
-It supports,
+LCI supports,
 - Multiple vendors of elevators (lifts) including Mitsubishi, Hitachi, Toshiba, Fujitec, OTIS and more
 - Multiple vendors of doors and turnstiles including Nabco, Teraoka, Kumahira and more
+- Fire alarms and seismic alarms
 
-The base protocol of LCI is RFA[^4] on MQTT.
+The protocol of LCI is open in [^5]. It is based on RFA standards[^4] on MQTT.
 
 This package bridges ROS2 (RMF Lift and Door Adapter) to LCI.
+It also works as a publisher of `/fire_alarm_trigger`.
 
 
 [^1]: https://osrf.github.io/ros2multirobotbook/integration_lifts.html
 [^2]: https://osrf.github.io/ros2multirobotbook/integration_doors.html
 [^3]: https://www.octa8.jp/service/
 [^4]: RFA is the acronym of the Robot Friendly Asset Promotion Association of Japan. RFA publishes the standards for the interfaces between robots and elevators/doors. RFA standards are available for purchase from [their homepage](https://robot-friendly.org/publication/). English version is also available.
-
+[^5]: https://developer.lci.octa8.link/
 
 # System requirements
 - ROS2 Humble or Jazzy
@@ -28,12 +30,14 @@ The more detail is exemplified in [Dockerfile](Dockerfile).
 
 
 # Topics
-| Message Types             | ROS2 Topic               | Description                                                              |
-| ------------------------- | ------------------------ | ------------------------------------------------------------------------ |
-| rmf_lift_msgs/LiftState   | `/lift_states`           | State of the lift published by the lift node                             |
-| rmf_lift_msgs/LiftRequest | `/adapter_lift_requests` | Requests to be sent to the lift supervisor to request operation of lifts |
-| rmf_door_msgs/DoorState   | `/door_states`           | State of the door published by the door node                             |
-| rmf_door_msgs/DoorRequest | `/adapter_door_requests` | Requests to be sent to the door supervisor to request operation of doors |
+| Message Types             | ROS2 Topic               | Description                                                                               |
+| ------------------------- | ------------------------ | ----------------------------------------------------------------------------------------- |
+| rmf_lift_msgs/LiftState   | `/lift_states`           | State of the lift published by the lift node                                              |
+| rmf_lift_msgs/LiftRequest | `/adapter_lift_requests` | Requests to be sent to the lift supervisor to request operation of lifts                  |
+| rmf_door_msgs/DoorState   | `/door_states`           | State of the door published by the door node                                              |
+| rmf_door_msgs/DoorRequest | `/adapter_door_requests` | Requests to be sent to the door supervisor to request operation of doors                  |
+| std_msgs/Bool             | `/fire_alarm_trigger`    | State of fire alarms to be emitted when fire signal comes from disaster prevention system |
+
 
 # Limitation
 ## For Lift
@@ -63,6 +67,16 @@ In case that the door detects reverse passing and closes itself when the robot i
 See *if*-block starting with `if rd_context._lci_context._door_type == 'flap':` in [lci_rmf_adapter.py](lci_rmf_adapter/lci_rmf_adapter/lci_rmf_adapter.py).
 
 The directional doors are marked with `lci_door_type: flap` in the config files of LCI (see [LCI files](#lci-files)).
+
+## For Alarms
+LCI supports multiple source of fire alarms for fire compartmentation. However, RMF does not provide a standard method to separate sources. Then, LCI RMF Adapter discards the source information and publish a simple `Bool` to `/fire_alarm_trigger`.
+
+Altough LCI also support seismic alarms in the same manner as fire alarms, the current LCI RMF Adapter does not forward the seismic alarms because there is no standard method in RMF.
+
+LCI RMF Adapter never publish `false` to `/fire_alarm_trigger`, because RMF would resume tasks when `false` was received via `/fire_alarm_trigger` even after emergency situations.
+
+Please manually send `false` to `/fire_alarm_trigger` to resume tasks after checking the environment related to robot operation. 
+
 
 
 # LCI files
@@ -172,12 +186,13 @@ See `LCI_DEVICE_NAME_SEPARATER` in [start.sh](start.sh).
 
 # Use LCI directly
 
-LCI does not only support the elevators (lifts) and the doors but also,
-- signals from alarm systems
+LCI does not only support the elevators (lifts), the doors and the alarms but also,
 - automatic setting and releasing of security systems
 - the exclusive control of resoruces among multiple robot systems (**LCI Sem**)
 - the messaging service between robots and humans (**LCI Bell**)
+- the telemetry service for robots (**LCI Board**)
 
-To use full functionaly of LCI, please use MQTT.
+
+To use full functionaly of LCI, please use MQTT with reference to [LCI Developer Portal](https://developer.lci.octa8.link/).
 
 [lci_client.py](lci_rmf_adapter/lci_rmf_adapter/lci_client.py) is an implementation of LCI client without ROS2.

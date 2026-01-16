@@ -15,7 +15,7 @@ import ssl
 import threading
 
 from abc import ABC, abstractmethod
-from typing import Any, Optional
+from typing import Any, Optional, Callable
 
 
 def _ruamel_yaml_to_native(obj):
@@ -71,6 +71,7 @@ class ResultCode(IntEnum):
 class DeviceType(Enum):
     ELEVATOR = 'elevator'
     DOOR = 'door'
+    ALARM = 'alarm'
 
 
 class LciFloorInfo:
@@ -134,7 +135,7 @@ class LciContext(ABC):
     _is_registered: bool
     _last_get_unregisterd_timestamp: float
 
-    def __init__(self, device_type: DeviceType, deadtime_after_error: float, logger=None) -> None:
+    def __init__(self, device_type: DeviceType, logger=None) -> None:
         if logger is None:
             self._logger = logging.getLogger('lci_client')
         else:
@@ -324,7 +325,7 @@ class LciElevatorContext(LciContext):
     _target_door: int
 
     def __init__(self, bldg_id: str, logger=None) -> None:
-        super().__init__(DeviceType.ELEVATOR, 30, logger)
+        super().__init__(DeviceType.ELEVATOR, logger)
         self._bldg_id = bldg_id
 
     def initialize(self, config: dict) -> bool:
@@ -424,7 +425,7 @@ class LciDoorContext(LciContext):
     _current_lock: int
 
     def __init__(self, bldg_id: str, logger=None) -> None:
-        super().__init__(DeviceType.DOOR, 10, logger)
+        super().__init__(DeviceType.DOOR, logger)
         self._bldg_id = bldg_id
 
     def initialize(self, config: dict) -> bool:
@@ -485,12 +486,104 @@ class LciDoorContext(LciContext):
         return True
 
 
+class LciAlarmContext:
+    _logger: Any
+    _device_type: DeviceType
+
+    _bldg_id: str
+    _alarm_type: str
+    _area_id: str
+
+    _alarm_name: str
+
+    # True: in alarm, False: not in alarm
+    _alarm_state: bool
+
+    _last_received_timestamp: float
+
+    # (alarm_type, area_id, bool) --> None
+    alarm_callback: Callable[[str, str, bool], None] | None
+
+    def __init__(self, bldg_id: str, logger=None) -> None:
+        self._logger = logger
+        self._device_type = DeviceType.ALARM
+        self._bldg_id = bldg_id
+        self.alarm_callback = None
+
+    def initialize(self, config: dict) -> bool:
+        self._alarm_type = config.get('lci_alarm_type', '')
+        self._area_id = config.get('lci_area_id', '')
+
+        ret = True
+
+        if self._alarm_type == '':
+            self._logger.error('[lci] <lci_alarm_type> is not specified.')
+            ret = False
+
+        if self._area_id == '':
+            self._logger.error('[lci] <lci_area_id> is not specified.')
+            ret = False
+
+        if ret == False:
+            return False
+
+        self._alarm_name = f'{self._alarm_type}/{self._area_id}'
+
+        self._alarm_state = False
+        self._last_received_timestamp = 0
+
+        return True
+
+    def _reset(self) -> None:
+        self._alarm_state = False
+        self._last_received_timestamp = 0
+
+    def msg_callback(self, payload: dict) -> None:
+        alarm_state = str(payload.get('alarm', None))
+        alarm_type = payload.get('alarm_type', None)
+        area_id = payload.get('area_id', None)
+        dry_run = payload.get('dry_run', False)
+
+        if alarm_type != self._alarm_type or area_id != self._area_id:
+            # not for this context
+            return
+
+        alarm_state_bool = None
+        if alarm_state == '99':
+            alarm_state_bool = True
+        elif alarm_state == '0':
+            alarm_state_bool = False
+
+        if alarm_state_bool is None:
+            # unexpected value
+            return
+
+        self._last_received_timestamp = time.time()
+
+        if dry_run is True:
+            self._logger.info(
+                f'[lci, {self._alarm_name}, dry_run] {alarm_state_bool}')
+            return
+
+        self._alarm_state = alarm_state_bool
+        if self.alarm_callback is not None:
+            try:
+                self.alarm_callback(
+                    self._alarm_type, self._area_id, alarm_state_bool)
+                self._logger.info(
+                    f'[lci, {self._alarm_name}] {alarm_state_bool}')
+            except Exception as e:
+                self._logger.error(
+                    f'[lci, {self._alarm_name}] [Exception in alarm_callback()] {e}')
+
+
 class LciClient:
     _logger: Any
 
     _mqtt_server: str
     _bldg_id: str
     _context_dict: dict[str, LciContext]
+    _alarm_context_dict: dict[str, LciAlarmContext]
 
     _robot_id: str
 
@@ -505,6 +598,7 @@ class LciClient:
             self._logger = logger
 
         self._context_dict = {}
+        self._alarm_context_dict = {}
 
         self._publish_lock = threading.Lock()
 
@@ -548,6 +642,14 @@ class LciClient:
                 context = LciDoorContext(self._bldg_id, self._logger)
                 if context.initialize(dc):
                     self._context_dict.update({context._topic_prefix: context})
+
+        alarm_config = config.get('alarms', None)
+        if type(alarm_config) is list:
+            for ac in alarm_config:
+                al_context = LciAlarmContext(self._bldg_id, self._logger)
+                if al_context.initialize(ac):
+                    self._alarm_context_dict.update(
+                        {al_context._alarm_name: al_context})
 
         try:
             v2_0_0 = parse('2.0.0')
@@ -615,6 +717,9 @@ class LciClient:
     def get_contexts(self) -> dict[str, LciContext]:
         return self._context_dict
 
+    def get_alarm_contexts(self) -> dict[str, LciAlarmContext]:
+        return self._alarm_context_dict
+
     def start(self):
         self._mqtt_client.loop_start()
 
@@ -633,6 +738,7 @@ class LciClient:
             (f'/lci/{self._bldg_id}/+/+/DoorStatus/{self._robot_id}', 1),
             (f'/lci/{self._bldg_id}/+/+/RobotStatusResult/{self._robot_id}', 1),
             (f'/lci/{self._bldg_id}/+/+/ReleaseResult/{self._robot_id}', 1),
+            (f'/lci/{self._bldg_id}/alarm/message', 1),
         ])
 
     def _on_disconnect(self, client: mqtt.Client, userdata: 'LciClient', rc: int) -> None:
@@ -656,6 +762,13 @@ class LciClient:
         self._msg_callback(msg.topic, payload_kv)
 
     def _msg_callback(self, topic: str, payload_kv: dict) -> None:
+        if topic == f'/lci/{self._bldg_id}/alarm/message':
+            for al_context in self._alarm_context_dict.values():
+                al_context.msg_callback(payload_kv)
+            self._logger.debug(
+                f'[/lci/{self._bldg_id}/alarm]   [mq_rcv] {payload_kv}')
+            return
+
         token = topic.split('/')
         topic_prefix = '/'.join(token[0:5])
         api = token[-2]
