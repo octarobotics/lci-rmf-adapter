@@ -410,11 +410,16 @@ class LciRmfAdapter(Node):
 
         # Subscribe door requests from RMF
         # https://osrf.github.io/ros2multirobotbook/integration_doors.html
+        # Strangely, the publisher of DoorRequest of RMF is created with default_qos: ReliabilityPolicy.RELIABLE and DurabilityPolicy.SYSTEM_DEFAULT.
+        # https://github.com/open-rmf/rmf_ros2/blob/main/rmf_fleet_adapter/src/rmf_fleet_adapter/agv/Node.cpp#L49-L51
+        # It seems a kind of bug in accordance with their design policy.
+        # Anyway, LCI RMF Adapter is needed to compromise to accept relaxed durability policy.
         self._door_request_sub = self.create_subscription(
             DoorRequest,
             'adapter_door_requests',
             self._door_request_callback,
-            qos_profile=request_qos_profile)
+            qos_profile=state_qos_profile)
+        #   qos_profile=request_qos_profile)
 
         # To publish all LiftState and DoorState every second.
         self._pub_rmf_state_timer = self.create_timer(
