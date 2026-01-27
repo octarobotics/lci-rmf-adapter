@@ -376,23 +376,37 @@ class LciRmfAdapter(Node):
         self._lci_client.start()
 
         # Initializing ROS2 messaging
-        state_qos_profile = QoSProfile(
+        pub_state_qos_profile = QoSProfile(
             depth=15, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.SYSTEM_DEFAULT)
 
-        request_qos_profile = QoSProfile(
+        pub_request_qos_profile = QoSProfile(
             depth=0, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL)
+
+        # Message loss happened for more than 10 sec during a seesion. It was detected timeout by lci_rmf_adaptery and resulted in unintended resetting.
+        # Relaxing reliability with BEST_EFFORT may improve this message loss.
+        #
+        # Some loss of message is not a problem.
+        # LiftRequest and DoorRequest are sent in 1 Hz.
+        # Their end of session with LiftRequest::REQUEST_END_SESSION and DoorMode::MODE_CLOSED are to be re-published until LiftState and DoorState indicate "reset".
+        # https://github.com/open-rmf/rmf_ros2/blob/main/rmf_fleet_adapter/src/lift_supervisor/Node.cpp#L110
+        # https://github.com/open-rmf/rmf_ros2/blob/main/rmf_fleet_adapter/src/door_supervisor/Node.cpp#L140
+        sub_state_qos_profile = QoSProfile(
+            depth=15, reliability=ReliabilityPolicy.BEST_EFFORT, durability=DurabilityPolicy.SYSTEM_DEFAULT)
+
+        sub_request_qos_profile = QoSProfile(
+            depth=0, reliability=ReliabilityPolicy.BEST_EFFORT, durability=DurabilityPolicy.TRANSIENT_LOCAL)
 
         # To publish lift status to RMF
         self._lift_state_pub = self.create_publisher(
             LiftState,
             'lift_states',
-            qos_profile=state_qos_profile)
+            qos_profile=pub_state_qos_profile)
 
         # To publish door status to RMF
         self._door_state_pub = self.create_publisher(
             DoorState,
             'door_states',
-            qos_profile=state_qos_profile)
+            qos_profile=pub_state_qos_profile)
 
         # To publish fire alarm to RMF
         # RMF subscribes fire_alarm_trigger with TRANSIENT_LOCAL
@@ -400,8 +414,7 @@ class LciRmfAdapter(Node):
         self._fire_alarm_pub = self.create_publisher(
             Bool,
             'fire_alarm_trigger',
-            qos_profile=request_qos_profile)
-        #   qos_profile=state_qos_profile)
+            qos_profile=pub_request_qos_profile)
 
         # Subscribe lift requests from RMF
         # https://osrf.github.io/ros2multirobotbook/integration_lifts.html
@@ -409,7 +422,7 @@ class LciRmfAdapter(Node):
             LiftRequest,
             'adapter_lift_requests',
             self._lift_request_callback,
-            qos_profile=request_qos_profile)
+            qos_profile=sub_request_qos_profile)
 
         # Subscribe door requests from RMF
         # https://osrf.github.io/ros2multirobotbook/integration_doors.html
@@ -421,8 +434,7 @@ class LciRmfAdapter(Node):
             DoorRequest,
             'adapter_door_requests',
             self._door_request_callback,
-            qos_profile=state_qos_profile)
-        #   qos_profile=request_qos_profile)
+            qos_profile=sub_state_qos_profile)
 
         # To publish all LiftState and DoorState every second.
         self._pub_rmf_state_timer = self.create_timer(
