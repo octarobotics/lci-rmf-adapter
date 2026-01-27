@@ -395,10 +395,13 @@ class LciRmfAdapter(Node):
             qos_profile=state_qos_profile)
 
         # To publish fire alarm to RMF
+        # RMF subscribes fire_alarm_trigger with TRANSIENT_LOCAL
+        # https://github.com/open-rmf/rmf_ros2/blob/main/rmf_fleet_adapter/src/rmf_fleet_adapter/agv/Node.cpp#L73-L75
         self._fire_alarm_pub = self.create_publisher(
             Bool,
             'fire_alarm_trigger',
-            qos_profile=state_qos_profile)
+            qos_profile=request_qos_profile)
+        #   qos_profile=state_qos_profile)
 
         # Subscribe lift requests from RMF
         # https://osrf.github.io/ros2multirobotbook/integration_lifts.html
