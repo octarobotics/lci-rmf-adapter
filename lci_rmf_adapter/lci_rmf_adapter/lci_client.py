@@ -72,6 +72,7 @@ class DeviceType(Enum):
     ELEVATOR = 'elevator'
     DOOR = 'door'
     ALARM = 'alarm'
+    SEM = 'sem'
 
 
 class LciFloorInfo:
@@ -109,7 +110,7 @@ class LciResponseEvent:
 
 class LciContext(ABC):
     """
-    Context class for LCI to support multiple elevators and doors with a single Robot Account.
+    Context class for LCI to support multiple devices (elevators, doors or so) with a single Robot Account.
     """
     _logger: Any
 
@@ -577,6 +578,98 @@ class LciAlarmContext:
                     f'[lci, {self._alarm_name}] [Exception in alarm_callback()] {e}')
 
 
+class LciSemContext(LciContext):
+    _bldg_id: str
+    _resource_id: str
+    _resource_type: str
+    _locked_by: str
+    _expiration_time: float
+    _max_expiration_time: float
+
+    # Special extension for RMF. This value will be used in LCI RMF Adapter.
+    _num_of_vdoor: int
+
+    def __init__(self, bldg_id: str, logger=None) -> None:
+        super().__init__(DeviceType.SEM, logger)
+        self._bldg_id = bldg_id
+
+    def initialize(self, config: dict) -> bool:
+        self._resource_id = config.get('lci_resource_id', '')
+        self._resource_type = config.get('lci_resource_type', '')
+        self._locked_by = ''
+        self._expiration_time = 0
+        self._max_expiration_time = 0
+
+        try:
+            # Special extension for RMF. This value will be used in LCI RMF Adapter.
+            self._num_of_vdoor = int(config.get('num_of_vdoor', 1))
+        except:
+            self._num_of_vdoor = 1
+
+        ret = True
+
+        if self._resource_id == '':
+            self._logger.error('[lci] <lci_resource_id> is not specified.')
+            ret = False
+
+        if self._resource_type != 'binary':
+            self._logger.error(
+                f'[lci] resource_type: {self._resource_type} is not supported.')
+            ret = False
+
+        if ret == False:
+            return False
+
+        self._topic_prefix = f'/lci/{self._bldg_id}/sem/{self._resource_id}'  # noqa
+
+        return True
+
+    def _reset(self):
+        self._locked_by = ''
+        self._expiration_time = 0
+        self._max_expiration_time = 0
+
+    def proc_response_payload(self, api: str, res_payload: dict) -> bool:
+        ret = super().proc_response_payload(api, res_payload)
+
+        if res_payload is None or not ret:
+            return False
+
+        # ResultCode.SUCCESS
+
+        match api:
+            case 'Registration':
+                if res_payload.get('dry_run', False):
+                    return True
+
+                self._locked_by = res_payload.get(
+                    'requested_robot_id', '')
+                self._expiration_time = res_payload.get(
+                    'expiration_time', 0)
+                self._max_expiration_time = res_payload.get(
+                    'max_expiration_time', 0)
+                return True
+
+            case 'RequestResourceStatus':
+                # RequestResourceStatus will be succeeded even when another robot take the resource.
+                # By cheking the change of who uses this resource, make it as an error.
+
+                locked_by = res_payload.get(
+                    'robot_id', '')
+                if self._locked_by != locked_by:
+                    self.set_registered(False)
+                    return False
+
+                # update the expiration times
+                self._expiration_time = res_payload.get(
+                    'expiration_time', 0)
+                self._max_expiration_time = res_payload.get(
+                    'max_expiration_time', 0)
+                return True
+
+        return True
+
+
 class LciClient:
     _logger: Any
 
@@ -650,6 +743,13 @@ class LciClient:
                 if al_context.initialize(ac):
                     self._alarm_context_dict.update(
                         {al_context._alarm_name: al_context})
+
+        sem_config = config.get('sems', None)
+        if type(sem_config) is list:
+            for sc in sem_config:
+                context = LciSemContext(self._bldg_id, self._logger)
+                if context.initialize(sc):
+                    self._context_dict.update({context._topic_prefix: context})
 
         try:
             v2_0_0 = parse('2.0.0')
@@ -741,6 +841,11 @@ class LciClient:
             (f'/lci/{self._bldg_id}/alarm/message', 1),
         ])
 
+        # Sem-specific topic
+        self._mqtt_client.subscribe([
+            (f'/lci/{self._bldg_id}/+/+/ResourceStatus/{self._robot_id}', 1),
+        ])
+
     def _on_disconnect(self, client: mqtt.Client, userdata: 'LciClient', rc: int) -> None:
         self._logger.info(
             f'[lci] Disconnected from {self._mqtt_server} with client_id {self._robot_id}, result code ' + str(rc))
@@ -794,10 +899,16 @@ class LciClient:
         topic = f'{context._topic_prefix}/{api}/{self._robot_id}'
         timestamp = int(time.time() * 1000)/1000
 
-        payload.update({
-            'robot_id': self._robot_id,
-            'timestamp': timestamp,
-        })
+        if context._device_type == DeviceType.SEM:
+            # Sem API does not require robot_id in the payload.
+            payload.update({
+                'timestamp': timestamp,
+            })
+        else:
+            payload.update({
+                'robot_id': self._robot_id,
+                'timestamp': timestamp,
+            })
         json_payload = json.dumps(payload)
 
         # To wait with timeout, LciResponseEvent (similar class to threading.Event) is registered to context.
@@ -884,6 +995,10 @@ class LciClient:
                         time.sleep(retry_interval_sec)
                     continue
 
+            # Sem API does not respond with requested_robot_id in payload
+            if 'requested_robot_id' not in res_payload:
+                res_payload['requested_robot_id'] = self._robot_id
+
             return context.proc_response_payload(api, res_payload)
 
         # This timeout may be because LCI server or device are not reachable.
@@ -892,7 +1007,7 @@ class LciClient:
             f'[{context._topic_prefix}] [lci, {api}, res: timeout]')
         return False
 
-    def do_registration(self, context: LciContext, dry_run: bool = False) -> bool:
+    def do_registration_elevator(self, context: LciElevatorContext, dry_run: bool = False) -> bool:
         # When return False, this funciton should be retried.
 
         if dry_run:
@@ -904,6 +1019,34 @@ class LciClient:
         return self._sync_execute_with_retry(context, 'Registration', payload,
                                              response_timeout_sec=185, wait_response=True,
                                              max_retry_num=6, retry_interval_sec=30)
+
+    def do_registration_door(self, context: LciDoorContext, dry_run: bool = False) -> bool:
+        # When return False, this funciton should be retried.
+
+        if dry_run:
+            payload = {'dry_run': True}
+        else:
+            payload = {}
+
+        # max_retry_num: 9 with retry_interval_sec: 10 means 90s in total. It is enough time to wait for Release by another robot.
+        return self._sync_execute_with_retry(context, 'Registration', payload,
+                                             response_timeout_sec=10, wait_response=True,
+                                             max_retry_num=9, retry_interval_sec=10)
+
+    def do_registration_sem(self, context: LciSemContext, dry_run: bool = False) -> bool:
+        # When return False, this funciton should be retried.
+
+        if dry_run:
+            payload = {'dry_run': True,
+                       'timeout': 180}
+        else:
+            # Request 180s for timeout
+            payload = {'timeout': 180}
+
+        # max_retry_num: 18 with retry_interval_sec: 10 means 180s in total. It is enough time to wait for Release by another robot.
+        return self._sync_execute_with_retry(context, 'Registration', payload,
+                                             response_timeout_sec=10, wait_response=True,
+                                             max_retry_num=18, retry_interval_sec=10)
 
     def do_release(self, context: LciContext, wait_response: bool = True) -> bool:
         return self._sync_execute_with_retry(context, 'Release', {},
@@ -970,6 +1113,11 @@ class LciClient:
 
     def do_request_door_status(self, context: LciDoorContext) -> bool:
         return self._sync_execute_with_retry(context, 'RequestDoorStatus', {},
+                                             response_timeout_sec=5, wait_response=True,
+                                             max_retry_num=1, retry_interval_sec=2)
+
+    def do_request_resource_status(self, context: LciSemContext) -> bool:
+        return self._sync_execute_with_retry(context, 'RequestResourceStatus', {},
                                              response_timeout_sec=5, wait_response=True,
                                              max_retry_num=1, retry_interval_sec=2)
 

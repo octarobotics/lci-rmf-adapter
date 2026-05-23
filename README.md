@@ -7,6 +7,7 @@ LCI supports,
 - Multiple vendors of elevators (lifts) including Mitsubishi, Hitachi, Toshiba, Fujitec, OTIS and more
 - Multiple vendors of doors and turnstiles including Nabco, Teraoka, Kumahira and more
 - Fire alarms and seismic alarms
+- Exclusive access areas among multiple systems
 
 The protocol of LCI is open in [^5]. It is based on RFA standards[^4] on MQTT.
 
@@ -77,6 +78,42 @@ LCI RMF Adapter never publish `false` to `/fire_alarm_trigger`, because RMF woul
 
 Please manually send `false` to `/fire_alarm_trigger` to resume tasks after checking the environment related to robot operation. 
 
+## For Exclusive access areas
+### General
+LCI supports exclusive access areas such as intersections or narrow passages. This feature is based on the "LCI Sem" service, which is a general resource management system for mutual exclusion control among multiple clients, including systems other than RMF.
+
+
+This feature shall be used together with the `Mutex Group` functions of RMF in accordance with the following instructions:
+
+- Configure the `Mutex Group` area to be larger than the exclusive access area in order to avoid race conditions between RMF and other systems.
+- Configure virtual doors at the boundary between the exclusive access area and the surrounding area.
+- Ensure that only one requester is allowed to send MODE_OPEN DoorRequests to the virtual doors at a time.
+
+[!NOTE]
+If you are able to customize or replace the `mutex_group_supervisor` Node of RMF, it is possible to integrate LCI Sem directly. However, this is often difficult in practice because it changes the behaviour of the `Mutex Group` mechanism and, moreover, RMF is typically deployed and managed by a different system integrator. Therefore, LCI RMF Adapter adopts the virtual door approach.
+
+
+### `door_name` format
+The name of an exclusive access area is of the format `/lci/<bldg_id>/sem/<resource_id>`.
+Then, the `door_name` of the virtual door shall be  `/lci/<bldg_id>/sem/<resource_id>/<virtual_door_id>`.
+
+This `<virtual_door_id>` shall be a positive integer string no more than the number defined as `num_of_vdoor` in the configuration file (e.g. [server_config_simulator.yaml](lci_config/server_config_simulator.yaml)). You may freely adjust `num_of_vdoor` in the configuration file according to the number of virtual doors required for your system configuration. This parameter is local to LCI RMF Adapter and does not affect the behaviour of the LCI system itself.
+
+### Procedure
+When a robot attempts to pass through a virtual door, LCI RMF Adapter acquires the access right to the corresponding area via LCI Sem.
+
+While the access right is held, other robot systems are prevented from acquiring the access right associated with that area.
+
+After the robot passes through the next virtual door, the LCI RMF Adapter releases the access right to the area via LCI Sem.
+
+[!IMPORTANT]
+Because DoorState of the virtual doors are visible to all requesters, a requester that continuously sends DoorRequest while waiting for the access right may incorrectly determine that access has been granted. This occurs because the virtual door appears to be open even when the access right has actually been granted to another requester. Therefore, unless the above instructions are strictly followed, race conditions can inherently occur and are difficult to avoid completely under this mechanism.
+
+
+### Timeout
+LCI Sem monitors the elapsed time since the access rights were acquired. If the elapsed time exceeds 180 seconds (currently hardcoded in do_registration_sem() in lci_client.py), the resource is automatically released.
+
+Therefore, please note that if a robot becomes stuck within the area and is unable to exit, the resource will eventually be released automatically after the timeout period.
 
 
 # LCI files
@@ -177,6 +214,18 @@ Its entry point is [test_client_door.sh](test_client_door.sh)
 Please edit `DOOR_NAME` in [test_client_door.sh](test_client_door.sh) for trial
 
 `DOOR_NAME` is of the format `/lci/<bldg_id>/<floor_id>/<door_id>`.
+
+## For Virtual Door (Exclusive access area)
+
+ROS2 Node example is found in [the test code for virtual doors bound with LCI Sem](lci_rmf_adapter/lci_rmf_adapter/lci_rmf_adapter_sem_virtual_door_test.py).
+
+Its entry point is [test_client_sem_virtual_door.sh](test_client_sem_virtual_door.sh)
+
+Please edit `RESOURCE_NAME` in [test_client_sem_virtual_door.sh](test_client_sem_virtual_door.sh) for trial
+
+`RESOURCE_NAME` is of the format `/lci/<bldg_id>/sem/<resource_id>/`.
+
+This `<virtual_door_id>` shall be a positive integer string no more than the number defined as `num_of_vdoor` in the configuration file (e.g. [server_config_simulator.yaml](lci_config/server_config_simulator.yaml))
 
 ## Separater for device names
 RMF Web have a trouble with slash separated lift_name and door_name because it may require those values to be URL safe.

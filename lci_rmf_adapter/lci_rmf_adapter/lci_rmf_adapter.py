@@ -11,11 +11,12 @@ from rclpy.publisher import Publisher
 
 from . import lci_client
 import threading
-from typing import Any, Optional
+from typing import Any
 from abc import ABC, abstractmethod
 import time
 from typing import Callable
 from queue import Queue
+from enum import Enum
 
 
 class RmfContext(ABC):
@@ -61,7 +62,6 @@ class RmfContext(ABC):
 
         self._lci_context = lci_context
 
-        self._is_occupied = False
         self._occupant_id = ''
         self._lock = threading.RLock()
 
@@ -91,16 +91,14 @@ class RmfContext(ABC):
 
     def set_occupant(self, occupant_id: str) -> bool:
         with self._lock:
-            if self._is_occupied and self._occupant_id != occupant_id:
+            if self.has_occupant() and self._occupant_id != occupant_id:
                 return False
 
-            self._is_occupied = True
             self._occupant_id = occupant_id
             return True
 
     def reset(self) -> None:
         with self._lock:
-            self._is_occupied = False
             self._occupant_id = ''
             self._under_resetting = False
             self._last_recv_request_time = 0
@@ -108,15 +106,11 @@ class RmfContext(ABC):
     def get_occupant(self) -> str:
         return self._occupant_id
 
-    def set_destination_floor(self, destination_floor: str) -> None:
-        with self._lock:
-            self._destination_floor = destination_floor
-
-    def get_destination_floor(self) -> str:
-        return self._destination_floor
+    def has_occupant(self) -> bool:
+        return self._occupant_id != ''
 
     @abstractmethod
-    def get_status(self) -> LiftState | DoorState:
+    def get_status(self) -> LiftState | DoorState | list[DoorState]:
         pass
 
     def need_to_hide_offline_mode(self, deadtime: float) -> bool:
@@ -235,6 +229,13 @@ class RmfLiftContext(RmfContext):
 
         return lift_state
 
+    def set_destination_floor(self, destination_floor: str) -> None:
+        with self._lock:
+            self._destination_floor = destination_floor
+
+    def get_destination_floor(self) -> str:
+        return self._destination_floor
+
 
 class RmfDoorContext(RmfContext):
     _lci_context: lci_client.LciDoorContext
@@ -301,11 +302,124 @@ class RmfDoorContext(RmfContext):
         self._is_door_open_asked = onoff
 
 
+class SemAgentState(Enum):
+    WAIT_FOR_1st_VDOOR_OPEN = 0
+    WAIT_FOR_1st_VDOOR_CLOSE = 1
+    WAIT_FOR_2nd_VDOOR_OPEN = 2
+    WAIT_FOR_2nd_VDOOR_CLOSE = 3
+
+    def is_open_requested(self) -> bool:
+        return self in (SemAgentState.WAIT_FOR_1st_VDOOR_CLOSE, SemAgentState.WAIT_FOR_2nd_VDOOR_CLOSE)
+
+    def is_wait_for_open_request(self) -> bool:
+        return self in (SemAgentState.WAIT_FOR_1st_VDOOR_OPEN, SemAgentState.WAIT_FOR_2nd_VDOOR_OPEN)
+
+    def is_wait_for_close_request(self) -> bool:
+        return self in (SemAgentState.WAIT_FOR_1st_VDOOR_CLOSE, SemAgentState.WAIT_FOR_2nd_VDOOR_CLOSE)
+
+    def is_robot_in_area(self) -> bool:
+        return self in (SemAgentState.WAIT_FOR_1st_VDOOR_CLOSE, SemAgentState.WAIT_FOR_2nd_VDOOR_OPEN)
+
+    def need_check_request_timeout(self) -> bool:
+        return self.is_open_requested()
+
+    @staticmethod
+    def initial_state() -> "SemAgentState":
+        return SemAgentState.WAIT_FOR_1st_VDOOR_OPEN
+
+    def open_requested(self) -> "SemAgentState":
+        match self:
+            case SemAgentState.WAIT_FOR_1st_VDOOR_OPEN:
+                return SemAgentState.WAIT_FOR_1st_VDOOR_CLOSE
+            case SemAgentState.WAIT_FOR_2nd_VDOOR_OPEN:
+                return SemAgentState.WAIT_FOR_2nd_VDOOR_CLOSE
+            case _:
+                return self
+
+    def close_requested(self) -> "SemAgentState":
+        match self:
+            case SemAgentState.WAIT_FOR_1st_VDOOR_CLOSE:
+                return SemAgentState.WAIT_FOR_2nd_VDOOR_OPEN
+            case SemAgentState.WAIT_FOR_2nd_VDOOR_CLOSE:
+                return SemAgentState.initial_state()
+            case _:
+                return self
+
+
+class RmfSemContext(RmfContext):
+    _lci_context: lci_client.LciSemContext
+
+    _num_of_vdoor: int
+    _target_vdoor_id: int
+    _sem_vdoor_state: SemAgentState
+
+    def __init__(self, lci_context: lci_client.LciSemContext, logger=None) -> None:
+        super().__init__(lci_context, logger)
+        self._num_of_vdoor = lci_context._num_of_vdoor
+        self._target_vdoor_id = 0
+        self._sem_vdoor_state = SemAgentState.initial_state()
+
+    def reset(self) -> None:
+        with self._lock:
+            super().reset()
+            self._target_vdoor_id = 0
+            self._sem_vdoor_state = SemAgentState.initial_state()
+
+    def _create_status_list(self) -> list[DoorState]:
+        ret = []
+        for i in range(self._num_of_vdoor):
+            door_state = DoorState()
+            door_state.door_name = f'{self._lci_context._topic_prefix}/{i+1}'
+            door_state.current_mode.value = DoorMode.MODE_CLOSED
+            ret.append(door_state)
+        return ret
+
+    def is_request_acceptable(self) -> bool:
+        return self.need_to_hide_offline_mode(10.0) or (self._lci_context.is_connected() and self._lci_context.is_available())
+
+    def get_status(self) -> list[DoorState]:
+        # All status are MODE_CLOSED here
+        ret = self._create_status_list()
+
+        if not self.is_request_acceptable():
+            for st in ret:
+                st.current_mode.value = DoorMode.MODE_OFFLINE
+            return ret
+
+        self._log_debug(
+            f'target_vdoor: {self._target_vdoor_id}, is_registered: {self._lci_context.is_registered()}, occupant: {self.get_occupant()}, is_open_requested: {self._sem_vdoor_state.is_open_requested()}')
+
+        # Virtual door status can be seen by other requester_id (other sender Nodes).
+        # To avoid for other robots to wrongly enter to the area, the user shall assure to keep the sender Node single
+        # by using Mutex Group of RMF.
+        if self._lci_context.is_registered() and self.has_occupant() and not self._under_resetting and self._sem_vdoor_state.is_open_requested() and self._target_vdoor_id != 0:
+            ret[self._target_vdoor_id - 1].current_mode.value = DoorMode.MODE_OPEN
+
+        return ret
+
+    def open_request_received(self, target_vdoor_id: int) -> bool:
+        with self._lock:
+            if self._sem_vdoor_state.is_wait_for_open_request():
+                self._sem_vdoor_state = self._sem_vdoor_state.open_requested()
+                self._target_vdoor_id = target_vdoor_id
+                return True
+        return False
+
+    def close_request_received(self, target_vdoor_id: int) -> bool:
+        with self._lock:
+            if self._sem_vdoor_state.is_wait_for_close_request() and self._target_vdoor_id == target_vdoor_id:
+                self._sem_vdoor_state = self._sem_vdoor_state.close_requested()
+                self._target_vdoor_id = 0
+                return True
+        return False
+
+
 class LciRmfAdapter(Node):
     _lci_client: lci_client.LciClient
 
     _lift_context_dict: dict[str, RmfLiftContext]
     _door_context_dict: dict[str, RmfDoorContext]
+    _sem_context_dict: dict[str, RmfSemContext]
 
     _lift_state_pub: Publisher
     _door_state_pub: Publisher
@@ -343,6 +457,7 @@ class LciRmfAdapter(Node):
 
         self._lift_context_dict = {}
         self._door_context_dict = {}
+        self._sem_context_dict = {}
 
         for name, l_context in lci_context_dict.items():
             if isinstance(l_context, lci_client.LciElevatorContext):
@@ -351,6 +466,9 @@ class LciRmfAdapter(Node):
             elif isinstance(l_context, lci_client.LciDoorContext):
                 self._door_context_dict.update(
                     {name: RmfDoorContext(l_context, self.get_logger())})
+            elif isinstance(l_context, lci_client.LciSemContext):
+                self._sem_context_dict.update(
+                    {name: RmfSemContext(l_context, self.get_logger())})
 
         def publish_fire_alarm(alarm_type: str, area_id: str, alarm_state: bool):
             if not alarm_state:
@@ -461,6 +579,14 @@ class LciRmfAdapter(Node):
             door_state.door_time = current_time
             self._door_state_pub.publish(door_state)
 
+        for rs_context in self._sem_context_dict.values():
+            door_state_list = rs_context.get_status()
+            for door_state in door_state_list:
+                door_state.door_name = door_state.door_name.replace(
+                    '/', self._device_name_separater)
+                door_state.door_time = current_time
+                self._door_state_pub.publish(door_state)
+
     def _sync_elevator_status(self, rl_context: RmfLiftContext) -> None:
         rl_context._log_debug('[lra] RequestElevatorStatus, start')
         ret = self._lci_client.do_request_elevator_status(
@@ -483,6 +609,17 @@ class LciRmfAdapter(Node):
             rd_context.reset()
             return
         rd_context._log_debug('[lra] RequestDoorStatus, success')
+
+    def _sync_sem_status(self, rs_context: RmfSemContext) -> None:
+        rs_context._log_debug('[lra] RequestResourceStatus, start')
+        ret = self._lci_client.do_request_resource_status(
+            rs_context._lci_context)
+
+        if not ret:
+            rs_context._log_debug('[lra] RequestResourceStatus, failed')
+            rs_context.reset()
+            return
+        rs_context._log_debug('[lra] RequestResourceStatus, success')
 
     def _sync_lci_status(self):
         for rl_context in self._lift_context_dict.values():
@@ -508,6 +645,19 @@ class LciRmfAdapter(Node):
                 rd_context._log_error(
                     f'[lra, door_req timeout] {rd_context.get_occupant()}')
                 self.reset_door(rd_context)
+
+        for rs_context in self._sem_context_dict.values():
+            if (rs_context._lci_context.is_registered() and not rs_context._under_resetting and
+                    rs_context._request_queue.empty() and not rs_context._in_request_proccessing.is_set()):
+                rs_context.put_request(
+                    self._sync_sem_status, (rs_context,))
+
+            if rs_context._lci_context.is_registered() and (rs_context._sem_vdoor_state.need_check_request_timeout() and
+                                                            rs_context._last_recv_request_time + 10.0 < time.time()):
+                # RMF may be in hang. Timeout
+                rs_context._log_error(
+                    f'[lra, door_req (sem) timeout] {rs_context.get_occupant()}')
+                self.reset_sem(rs_context)
 
     ####
     # Lift
@@ -671,7 +821,8 @@ class LciRmfAdapter(Node):
 
         rl_context._log_debug('[lra] Registration, start')
         rl_context._hide_door_open_state = True
-        ret = self._lci_client.do_registration(rl_context._lci_context)
+        ret = self._lci_client.do_registration_elevator(
+            rl_context._lci_context)
 
         if not ret:
             rl_context._log_debug('[lra] Registration, failed')
@@ -758,7 +909,20 @@ class LciRmfAdapter(Node):
     # Door
 
     def _door_request_callback(self, msg: DoorRequest) -> None:
-        door_name_key = msg.door_name.replace(self._device_name_separater, '/')
+        door_name_key: str = msg.door_name.replace(
+            self._device_name_separater, '/')
+
+        # door: `/lci/<bldg_id>/<floor_id>/<door_id>`
+        # sem:  `/lci/<bldg_id>/sem/<resource_id>/<virtual door_id>`
+        parts = door_name_key.split('/')
+        if parts[3] == "sem":
+            # This DoorRequest are to be handled by LCI Sem
+            sem_name_key = '/'.join(parts[:-1])
+            try:
+                vdoor_id = int(parts[-1])
+            except:
+                return
+            return self._sem_request_callback(sem_name_key, vdoor_id, msg)
 
         rd_context = self._door_context_dict.get(door_name_key, None)
         if rd_context is None:
@@ -838,7 +1002,7 @@ class LciRmfAdapter(Node):
 
         rd_context._log_debug('[lra] Registration, start')
 
-        ret = self._lci_client.do_registration(
+        ret = self._lci_client.do_registration_door(
             rd_context._lci_context)
 
         if not ret:
@@ -873,6 +1037,90 @@ class LciRmfAdapter(Node):
 
     def reset_door(self, rd_context: RmfDoorContext) -> None:
         rd_context.put_request(target=self._reset_door, args=(rd_context,))
+
+    ####
+    # Sem
+
+    def _sem_request_callback(self, sem_name_key: str, vdoor_id: int, msg: DoorRequest) -> None:
+        rs_context = self._sem_context_dict.get(sem_name_key, None)
+        if rs_context is None:
+            return
+
+        if vdoor_id <= 0 or rs_context._num_of_vdoor < vdoor_id:
+            return
+
+        if not rs_context.is_request_acceptable():
+            return
+
+        # requester_id means the sender Node name
+        if rs_context.get_occupant() == '':
+            rs_context.set_occupant(msg.requester_id)
+
+        elif rs_context.get_occupant() != msg.requester_id:
+            rs_context._log_warning(
+                f'[lra, door_req (sem/{vdoor_id}), requester_id mismatch] owned: {rs_context.get_occupant()}, req: {msg.requester_id}')
+            return
+
+        match msg.requested_mode.value:
+            case DoorMode.MODE_CLOSED:
+                if rs_context.close_request_received(vdoor_id):
+                    rs_context._log_info(
+                        f'[lra, door_req (sem/{vdoor_id}) accepted] MODE_CLOSED')
+
+                    if not rs_context._sem_vdoor_state.is_robot_in_area():
+                        # When the robot is outside of the area, Release shall be sent to LCI and reset.
+                        self.reset_sem(rs_context)
+                        return
+
+            case DoorMode.MODE_OPEN:
+                rs_context._last_recv_request_time = time.time()
+
+                if rs_context.open_request_received(vdoor_id):
+                    rs_context._log_info(
+                        f'[lra, door_req (sem/{vdoor_id}) accepted] MODE_OPEN')
+
+                    if not rs_context._lci_context.is_registered():
+                        self.register_sem(rs_context)
+                        return
+
+            case _:
+                rs_context._log_warning(
+                    f'[lra, door_req (sem/{vdoor_id}), unsupported requested_mode] {msg.requested_mode.value}')
+
+    def _register_sem(self, rs_context: RmfSemContext) -> None:
+        if not rs_context.is_request_acceptable():
+            # do_request_elevator_status() failed because MQTT was disconnected.
+            rs_context._log_error(
+                '[lra, sem] No connection.')
+            rs_context.reset()
+            return
+
+        rs_context._log_debug('[lra, sem] Registration, start')
+
+        ret = self._lci_client.do_registration_sem(
+            rs_context._lci_context)
+
+        if not ret:
+            rs_context._log_debug('[lra, sem] Registration, failed')
+            rs_context.reset()
+            return
+        rs_context._log_debug('[lra, sem] Registration, success')
+
+    def register_sem(self, rs_context: RmfSemContext) -> None:
+        rs_context.put_request(
+            target=self._register_sem, args=(rs_context,))
+
+    def _reset_sem(self, rs_context: RmfSemContext) -> None:
+        if rs_context._lci_context.is_registered():
+            rs_context._under_resetting = True
+
+            rs_context._log_debug('[lra, sem] Release')
+            self._lci_client.do_release(rs_context._lci_context)
+
+        rs_context.reset()
+
+    def reset_sem(self, rs_context: RmfSemContext) -> None:
+        rs_context.put_request(target=self._reset_sem, args=(rs_context,))
 
 
 def main(args=None):

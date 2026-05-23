@@ -47,6 +47,22 @@ elevators:
       - "8F"
       - "9F"
       - "10F"
+  - lci_bank_id: "4"
+    lci_elevator_id: "1"
+    lci_timeout_sec: 180
+    lci_floor_list:
+      - "B2"
+      - "B1"
+      - "1F"
+      - "2F"
+      - "3F"
+      - "4F"
+      - "5F"
+      - "6F"
+      - "7F"
+      - "8F"
+      - "9F"
+      - "10F"
 doors:
   - lci_floor_id: "3F"
     lci_door_id: "1"
@@ -84,3 +100,19 @@ doors:
     lci_door_id: "3"
     lci_door_type: lock
     lci_timeout_sec: 60
+alarms:
+  - lci_area_id: whole
+    lci_alarm_type: seismic_alarm
+  - lci_area_id: whole
+    lci_alarm_type: fire_alarm
+sems:
+  - lci_resource_id: "area-1"
+    lci_resource_type: "binary"
+    lci_timeout_sec: 60
+    lci_max_timeout_sec: 600
+    num_of_vdoor: 3
+  - lci_resource_id: "area-2"
+    lci_resource_type: "binary"
+    lci_timeout_sec: 60
+    lci_max_timeout_sec: 600
+    num_of_vdoor: 1
