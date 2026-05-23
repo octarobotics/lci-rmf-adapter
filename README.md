@@ -89,8 +89,10 @@ This feature shall be used together with the `Mutex Group` functions of RMF in a
 - Configure virtual doors at the boundary between the exclusive access area and the surrounding area.
 - Ensure that only one requester is allowed to send MODE_OPEN DoorRequests to the virtual doors at a time.
 
-[!NOTE]
-If you are able to customize or replace the `mutex_group_supervisor` Node of RMF, it is possible to integrate LCI Sem directly. However, this is often difficult in practice because it changes the behaviour of the `Mutex Group` mechanism and, moreover, RMF is typically deployed and managed by a different system integrator. Therefore, LCI RMF Adapter adopts the virtual door approach.
+> [!NOTE]
+> If you are able to customize or replace the `mutex_group_supervisor` Node of RMF, it is possible to integrate LCI Sem directly.
+> However, this is often difficult in practice because it changes the behaviour of the `Mutex Group` mechanism and, moreover, RMF is typically deployed and managed by a different system integrator.
+> Therefore, LCI RMF Adapter adopts the virtual door approach.
 
 
 ### `door_name` format
@@ -106,8 +108,10 @@ While the access right is held, other robot systems are prevented from acquiring
 
 After the robot passes through the next virtual door, the LCI RMF Adapter releases the access right to the area via LCI Sem.
 
-[!IMPORTANT]
-Because DoorState of the virtual doors are visible to all requesters, a requester that continuously sends DoorRequest while waiting for the access right may incorrectly determine that access has been granted. This occurs because the virtual door appears to be open even when the access right has actually been granted to another requester. Therefore, unless the above instructions are strictly followed, race conditions can inherently occur and are difficult to avoid completely under this mechanism.
+> [!IMPORTANT] 
+> Because DoorState of the virtual doors are visible to all requesters, a requester that continuously sends DoorRequest while waiting for the access right may incorrectly determine that access has been granted.
+> This occurs because the virtual door appears to be open even when the access right has actually been granted to another requester.
+> Therefore, unless the above instructions are strictly followed, race conditions can inherently occur and are difficult to avoid completely under this mechanism.
 
 
 ### Timeout
