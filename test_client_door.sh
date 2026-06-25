@@ -6,6 +6,10 @@ DOOR_NAME="/lci/simulator/1F/1"
 # If using another separater from "/", please set LCI_DEVICE_NAME_SEPARATER in start.sh
 # DOOR_NAME="_lci_simulator_1F_1"
 
+# If RMF uses the level-based identifiers such as L1, L2, L3, 
+# please specify floor_name_aliases in the configuration file. See README.md for more detail.
+# DOOR_NAME="/lci/simulator/L1/1"
+
 #LOG_LEVEL=debug
 LOG_LEVEL=info
 

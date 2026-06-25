@@ -237,6 +237,25 @@ RMF Web have a trouble with slash separated lift_name and door_name because it m
 To avoid their limitation, the separater replacement function is supported.
 See `LCI_DEVICE_NAME_SEPARATER` in [start.sh](start.sh).
 
+## Floor name aliases
+LCI uses floor identifiers such as 1F, 2F, and 3F for `floor_id`. However, some RMF systems use a level-based naming scheme instead, such as L1, L2, and L3.
+
+For buildings that use level-based identifiers, this adapter supports floor name aliases.
+
+To enable this feature, add a `floor_name_aliases` mapping to the configuration file using the following format:
+
+``` yaml
+floor_name_aliases:
+  "<floor_name_alias>": "<floor_id>"
+```
+
+For an example configuration, see the commented section at the bottom of [server_config_simulator.yaml](lci_config/server_config_simulator.yaml).
+
+When configured, the adapter automatically:
+- Converts LCI-style `floor_id` values to the corresponding `floor_name_alias` in LiftState and DoorState messages.
+- Interprets `floor_name_alias` values in `LiftRequest` and `DoorRequest` messages and converts them to the corresponding LCI-style `floor_id`.
+
+
 # Use LCI directly
 
 LCI does not only support the elevators (lifts), the doors and the alarms but also,

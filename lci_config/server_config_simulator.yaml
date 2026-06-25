@@ -116,3 +116,16 @@ sems:
     lci_timeout_sec: 60
     lci_max_timeout_sec: 600
     num_of_vdoor: 1
+
+# # Extension for RMF from floor_name alias to LCI floor_name
+# floor_name_aliases:
+#   "L1": "1F"
+#   "L2": "2F"
+#   "L3": "3F"
+#   "L4": "4F"
+#   "L5": "5F"
+#   "L6": "6F"
+#   "L7": "7F"
+#   "L8": "8F"
+#   "L9": "9F"
+#   "L10": "10F"

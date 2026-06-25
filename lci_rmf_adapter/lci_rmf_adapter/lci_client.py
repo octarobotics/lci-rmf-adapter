@@ -136,6 +136,10 @@ class LciContext(ABC):
     _is_registered: bool
     _last_get_unregisterd_timestamp: float
 
+    # Extension for RMF from floor_name alias to LCI floor_name
+    _floor_name_alias_to_lci: dict[str, str]
+    _floor_name_lci_to_alias: dict[str, str]
+
     def __init__(self, device_type: DeviceType, logger=None) -> None:
         if logger is None:
             self._logger = logging.getLogger('lci_client')
@@ -310,6 +314,17 @@ class LciContext(ABC):
     def is_registered(self) -> bool:
         return self._is_registered
 
+    # Extension for RMF from floor_name alias to LCI floor_name
+    def _set_floor_name_alias(self, floor_name_alias_to_lci: dict[str, str], floor_name_lci_to_alias: dict[str, str]) -> None:
+        self._floor_name_alias_to_lci = floor_name_alias_to_lci
+        self._floor_name_lci_to_alias = floor_name_lci_to_alias
+
+    def get_floor_name_alias(self, lci_floor_name: str) -> str:
+        return self._floor_name_lci_to_alias.get(lci_floor_name, lci_floor_name)
+
+    def get_lci_floor_name_by_alias(self, floor_name_alias: str) -> str:
+        return self._floor_name_alias_to_lci.get(floor_name_alias, floor_name_alias)
+
 
 class LciElevatorContext(LciContext):
     _bldg_id: str
@@ -425,6 +440,9 @@ class LciDoorContext(LciContext):
     _current_door: int
     _current_lock: int
 
+    # Extension for RMF from floor_name alias to LCI floor_name
+    _topic_prefix_alias: str
+
     def __init__(self, bldg_id: str, logger=None) -> None:
         super().__init__(DeviceType.DOOR, logger)
         self._bldg_id = bldg_id
@@ -485,6 +503,14 @@ class LciDoorContext(LciContext):
                 return False
 
         return True
+
+    # Extension for RMF from floor_name alias to LCI floor_name
+    def _set_floor_name_alias(self, floor_name_alias_to_lci: dict[str, str], floor_name_lci_to_alias: dict[str, str]) -> None:
+        super()._set_floor_name_alias(floor_name_alias_to_lci, floor_name_lci_to_alias)
+        self._topic_prefix_alias = f'/lci/{self._bldg_id}/{self.get_floor_name_alias(self._floor_id)}/{self._door_id}'
+
+    def get_topic_prefix_alias(self) -> str:
+        return self._topic_prefix_alias
 
 
 class LciAlarmContext:
@@ -750,6 +776,19 @@ class LciClient:
                 context = LciSemContext(self._bldg_id, self._logger)
                 if context.initialize(sc):
                     self._context_dict.update({context._topic_prefix: context})
+
+        # Extension for RMF to use floor_name alias
+        floor_name_alias_to_lci = {}
+        floor_name_lci_to_alias = {}
+        floor_name_alias_config = config.get('floor_name_aliases', None)
+        if type(floor_name_alias_config) is dict:
+            for floor_name_alias, lci_floor_name in floor_name_alias_config.items():
+                floor_name_alias_to_lci[floor_name_alias] = lci_floor_name
+                floor_name_lci_to_alias[lci_floor_name] = floor_name_alias
+        # Set floor name aliases to Lift and Door because they are using floor_id explicitly.
+        for context in self._context_dict.values():
+            context._set_floor_name_alias(
+                floor_name_alias_to_lci, floor_name_lci_to_alias)
 
         try:
             v2_0_0 = parse('2.0.0')

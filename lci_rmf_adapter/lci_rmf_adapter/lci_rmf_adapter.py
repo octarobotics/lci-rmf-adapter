@@ -139,10 +139,11 @@ class RmfLiftContext(RmfContext):
         # convolve door direction into floor_name
         self._rmf_floor_list = []
         for f in self._lci_context._floor_list:
+            floor_name = self._lci_context.get_floor_name_alias(f.floor_name)
             if f.has_front_door:
-                self._rmf_floor_list.append(f.floor_name)
+                self._rmf_floor_list.append(floor_name)
             if f.has_rear_door:
-                self._rmf_floor_list.append(f'{f.floor_name}_r')
+                self._rmf_floor_list.append(f'{floor_name}_r')
 
         self._destination_floor = ''
 
@@ -157,8 +158,7 @@ class RmfLiftContext(RmfContext):
     def _get_status(self) -> LiftState:
         lift_state = LiftState()
         lift_state.lift_name = self._lci_context._topic_prefix
-        lift_state.available_floors = [
-            x.floor_name for x in self._lci_context._floor_list]
+        lift_state.available_floors = self._rmf_floor_list
 
         lift_state.available_modes = [
             LiftState.MODE_OFFLINE, LiftState.MODE_AGV, LiftState.MODE_EMERGENCY, LiftState.MODE_UNKNOWN]
@@ -186,16 +186,22 @@ class RmfLiftContext(RmfContext):
 
         lift_state.current_mode = LiftState.MODE_AGV
 
+        # use floor name alias if specified in config
+        current_floor = self._lci_context.get_floor_name_alias(
+            self._lci_context._current_floor)
+        target_floor = self._lci_context.get_floor_name_alias(
+            self._lci_context._target_floor)
+
         # encode door direction to floor_name
         match self._lci_context._current_door:
             case 1:  # Front door opened
-                lift_state.current_floor = self._lci_context._current_floor
+                lift_state.current_floor = current_floor
                 lift_state.door_state = LiftState.DOOR_OPEN
             case 2:  # Rear door opened
-                lift_state.current_floor = f'{self._lci_context._current_floor}_r'  # noqa
+                lift_state.current_floor = f'{current_floor}_r'  # noqa
                 lift_state.door_state = LiftState.DOOR_OPEN
             case _:
-                lift_state.current_floor = self._lci_context._current_floor
+                lift_state.current_floor = current_floor
                 lift_state.door_state = LiftState.DOOR_CLOSED
 
         if not self._lci_context.is_registered() or self._hide_door_open_state:
@@ -205,9 +211,9 @@ class RmfLiftContext(RmfContext):
             lift_state.door_state = LiftState.DOOR_CLOSED
 
         if self._lci_context._target_door == 2:
-            lift_state.destination_floor = f'{self._lci_context._target_floor}_r'  # noqa
+            lift_state.destination_floor = f'{target_floor}_r'  # noqa
         else:
-            lift_state.destination_floor = self._lci_context._target_floor
+            lift_state.destination_floor = target_floor
 
         if lift_state.current_floor == lift_state.destination_floor and lift_state.door_state == LiftState.DOOR_OPEN:
             lift_state.motion_state = LiftState.MOTION_STOPPED
@@ -252,7 +258,7 @@ class RmfDoorContext(RmfContext):
 
     def _get_status(self) -> DoorState:
         door_state = DoorState()
-        door_state.door_name = self._lci_context._topic_prefix
+        door_state.door_name = self._lci_context.get_topic_prefix_alias()
 
         if not self._lci_context.is_connected():
             door_state.current_mode.value = DoorMode.MODE_OFFLINE
@@ -464,8 +470,12 @@ class LciRmfAdapter(Node):
                 self._lift_context_dict.update(
                     {name: RmfLiftContext(l_context, self.get_logger())})
             elif isinstance(l_context, lci_client.LciDoorContext):
+                # LCI format topic_prefix is used as the context name.
+                # It includes floor_id in the formart of "1F, 2F, ..."
+                # When floor name alias was set, it should be used as door_name from RMF
+                name_alias = l_context.get_topic_prefix_alias()
                 self._door_context_dict.update(
-                    {name: RmfDoorContext(l_context, self.get_logger())})
+                    {name_alias: RmfDoorContext(l_context, self.get_logger())})
             elif isinstance(l_context, lci_client.LciSemContext):
                 self._sem_context_dict.update(
                     {name: RmfSemContext(l_context, self.get_logger())})
@@ -833,6 +843,15 @@ class LciRmfAdapter(Node):
         origination, destination, origination_door, destination_door = self._prepare_call_elevator_params(
             origination, destination)
 
+        # convert to LCI format floor_id
+        if origination is not None:
+            origination = rl_context._lci_context.get_lci_floor_name_by_alias(
+                origination)
+
+        if destination is not None:
+            destination = rl_context._lci_context.get_lci_floor_name_by_alias(
+                destination)
+
         rl_context._log_debug('[lra] 1st CallElevator, start')
         ret = self._lci_client.do_call_elevator(
             rl_context._lci_context,
@@ -868,6 +887,11 @@ class LciRmfAdapter(Node):
 
         _, destination, _, destination_door = self._prepare_call_elevator_params(
             None, destination)
+
+        # convert to LCI format floor_id
+        if destination is not None:
+            destination = rl_context._lci_context.get_lci_floor_name_by_alias(
+                destination)
 
         rl_context._log_debug('[lra] 2nd CallElevator, start')
         ret = self._lci_client.do_call_elevator(

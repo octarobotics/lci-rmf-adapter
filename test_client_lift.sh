@@ -9,6 +9,11 @@ LIFT_NAME="/lci/simulator/1/1"
 ORIGINATION="B1"
 DESTINATION="M5"
 
+# If RMF uses the level-based identifiers such as L1, L2, L3, 
+# please specify floor_name_aliases in the configuration file. See README.md for more detail.
+# ORIGINATION="L1"
+# DESTINATION="L2"
+
 # ORIGINATION="R_r"
 # DESTINATION="8F_r"
 
