@@ -9,6 +9,15 @@ LCI_CERT_DIR="src/cert"
 # LCI_DEVICE_NAME_SEPARATER="_"
 LCI_DEVICE_NAME_SEPARATER="/" # default
 
+# RMF defines two topics for LiftRequest: "/lift_requests" and "/adapter_lift_requests",
+# and two topics for DoorRequest: "/door_requests" and "/adapter_door_requests".
+# To support different RMF deployments, these topics can be configured using environment variables.
+# RMF_LIFT_REQUESTS_TOPIC="lift_requests"
+# RMF_DOOR_REQUESTS_TOPIC="door_requests"
+RMF_LIFT_REQUESTS_TOPIC="adapter_lift_requests" # default
+RMF_DOOR_REQUESTS_TOPIC="adapter_door_requests" # default
+
+
 #LOG_LEVEL=debug
 LOG_LEVEL=info
 
@@ -22,4 +31,6 @@ ros2 run lci_rmf_adapter lci_rmf_adapter \
     --ros-args -p "lci_server_config:=$LCI_SERVER_CONFIG_YAML" \
     -p "lci_cert_dir:=$LCI_CERT_DIR" \
     -p "lci_device_name_separater:=$LCI_DEVICE_NAME_SEPARATER" \
+    -p "rmf_lift_requests_topic:=$RMF_LIFT_REQUESTS_TOPIC" \
+    -p "rmf_door_requests_topic:=$RMF_DOOR_REQUESTS_TOPIC" \
     --log-level $LOG_LEVEL

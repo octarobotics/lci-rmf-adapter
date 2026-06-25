@@ -37,10 +37,14 @@ class LciRmfAdapterLiftTest(Node):
                                ParameterDescriptor(description='Floor name of the origination.'))
         self.declare_parameter('destination',  '',
                                ParameterDescriptor(description='Floor name of the destination.'))
+        self.declare_parameter('rmf_lift_requests_topic',  'adapter_lift_requests',
+                               ParameterDescriptor(description='Topic name for LiftRequest used within RMF (default: "adapter_lift_requests")'))
 
         self._lift_name = self.get_parameter('lift_name').value
         self._origination = self.get_parameter('origination').value
         self._destination = self.get_parameter('destination').value
+        lift_requests_topic = self.get_parameter(
+            'rmf_lift_requests_topic').value
 
         self._use_state = LiftUseState.INIT
 
@@ -64,7 +68,7 @@ class LciRmfAdapterLiftTest(Node):
 
         self._lift_request_pub = self.create_publisher(
             LiftRequest,
-            'adapter_lift_requests',
+            lift_requests_topic,
             qos_profile=request_qos_profile)
 
         self._sequence = self.create_timer(

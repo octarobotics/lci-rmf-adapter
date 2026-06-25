@@ -34,10 +34,15 @@ The more detail is exemplified in [Dockerfile](Dockerfile).
 | Message Types             | ROS2 Topic               | Description                                                                               |
 | ------------------------- | ------------------------ | ----------------------------------------------------------------------------------------- |
 | rmf_lift_msgs/LiftState   | `/lift_states`           | State of the lift published by the lift node                                              |
-| rmf_lift_msgs/LiftRequest | `/adapter_lift_requests` | Requests to be sent to the lift supervisor to request operation of lifts                  |
+| rmf_lift_msgs/LiftRequest | `/adapter_lift_requests` or `/lift_requests` | Requests to be sent to the lift supervisor to request operation of lifts |
 | rmf_door_msgs/DoorState   | `/door_states`           | State of the door published by the door node                                              |
-| rmf_door_msgs/DoorRequest | `/adapter_door_requests` | Requests to be sent to the door supervisor to request operation of doors                  |
+| rmf_door_msgs/DoorRequest | `/adapter_door_requests` or `/door_requests` | Requests to be sent to the door supervisor to request operation of doors |
 | std_msgs/Bool             | `/fire_alarm_trigger`    | State of fire alarms to be emitted when fire signal comes from disaster prevention system |
+
+> [!NOTE] 
+> RMF defines two topics for LiftRequest: "/lift_requests" and "/adapter_lift_requests", and two topics for DoorRequest: "/door_requests" and "/adapter_door_requests".
+> To support different RMF deployments, these topics can be configured using environment variables: `RMF_LIFT_REQUESTS_TOPIC` and `RMF_DOOR_REQUESTS_TOPIC`.
+> Please refer to [start.sh](start.sh).
 
 
 # Limitation

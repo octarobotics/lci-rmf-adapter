@@ -28,8 +28,12 @@ class LciRmfAdapterDoorTest(Node):
         # Parameters used in this Node
         self.declare_parameter('door_name', '',
                                ParameterDescriptor(description='Door name "/lci/<bldg_id>/<floor_id>/<door_id>" to specify LCI-ed door.'))
+        self.declare_parameter('rmf_door_requests_topic',  'adapter_door_requests',
+                               ParameterDescriptor(description='Topic name for DoorRequest used within RMF (default: "adapter_door_requests")'))
 
         self._door_name = self.get_parameter('door_name').value
+        door_requests_topic = self.get_parameter(
+            'rmf_door_requests_topic').value
 
         self._use_state = DoorUseState.INIT
 
@@ -53,7 +57,7 @@ class LciRmfAdapterDoorTest(Node):
 
         self._door_request_pub = self.create_publisher(
             DoorRequest,
-            'adapter_door_requests',
+            door_requests_topic,
             qos_profile=request_qos_profile)
 
         self._sequence = self.create_timer(

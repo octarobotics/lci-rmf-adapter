@@ -6,6 +6,11 @@ LIFT_NAME="/lci/simulator/1/1"
 # If using another separater from "/", please set LCI_DEVICE_NAME_SEPARATER in start.sh
 # LIFT_NAME="_lci_simulator_1_1"
 
+# RMF defines two topics for LiftRequest: "/lift_requests" and "/adapter_lift_requests".
+# To support different RMF deployments, these topics can be configured using environment variables.
+# RMF_LIFT_REQUESTS_TOPIC="lift_requests"
+RMF_LIFT_REQUESTS_TOPIC="adapter_lift_requests" # default
+
 ORIGINATION="B1"
 DESTINATION="M5"
 
@@ -25,4 +30,9 @@ source /opt/ros/${ROS_DISTRO}/setup.sh
 colcon build --symlink-install --packages-skip-build-finished --packages-select rmf_lift_msgs rmf_door_msgs lci_rmf_adapter
 
 source install/setup.bash
-ros2 run lci_rmf_adapter lci_rmf_adapter_lift_test_single_destination --ros-args -p "lift_name:=$LIFT_NAME" -p "origination:=$ORIGINATION" -p "destination:=$DESTINATION" --log-level $LOG_LEVEL
+ros2 run lci_rmf_adapter lci_rmf_adapter_lift_test_single_destination \
+    --ros-args -p "lift_name:=$LIFT_NAME" \
+    -p "origination:=$ORIGINATION" \
+    -p "destination:=$DESTINATION" \
+    -p "rmf_lift_requests_topic:=$RMF_LIFT_REQUESTS_TOPIC" \
+    --log-level $LOG_LEVEL

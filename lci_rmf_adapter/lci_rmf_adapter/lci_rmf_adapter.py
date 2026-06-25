@@ -443,6 +443,10 @@ class LciRmfAdapter(Node):
                                ParameterDescriptor(description='Path to a certificate directory including certificate files (*.pem, ClientID) provided by Octa Robotics.'))
         self.declare_parameter('lci_device_name_separater',  '/',
                                ParameterDescriptor(description='Separater character(s) of lift_name and door_name used within RMF (default: "/")'))
+        self.declare_parameter('rmf_lift_requests_topic',  'adapter_lift_requests',
+                               ParameterDescriptor(description='Topic name for LiftRequest used within RMF (default: "adapter_lift_requests")'))
+        self.declare_parameter('rmf_door_requests_topic',  'adapter_door_requests',
+                               ParameterDescriptor(description='Topic name for DoorRequest used within RMF (default: "adapter_door_requests")'))
 
         # Initializing LciClient
         # ros2 run lci_rmf_lift_adapter lci_rmf_lift_adapter --ros-args -p "lci_server_config:=<path to server_config.yaml>" -p "lci_cert_dir:=<path to cert dir including pem files>"
@@ -451,6 +455,10 @@ class LciRmfAdapter(Node):
         cert_dir = self.get_parameter('lci_cert_dir').value
         self._device_name_separater = self.get_parameter(
             'lci_device_name_separater').value
+        lift_requests_topic = self.get_parameter(
+            'rmf_lift_requests_topic').value
+        door_requests_topic = self.get_parameter(
+            'rmf_door_requests_topic').value
 
         self.get_logger().info(
             f'Use "{server_config_file}" and "{cert_dir}"')
@@ -548,7 +556,7 @@ class LciRmfAdapter(Node):
         # https://osrf.github.io/ros2multirobotbook/integration_lifts.html
         self._lift_request_sub = self.create_subscription(
             LiftRequest,
-            'adapter_lift_requests',
+            lift_requests_topic,
             self._lift_request_callback,
             qos_profile=sub_request_qos_profile)
 
@@ -560,7 +568,7 @@ class LciRmfAdapter(Node):
         # Anyway, LCI RMF Adapter is needed to compromise to accept relaxed durability policy.
         self._door_request_sub = self.create_subscription(
             DoorRequest,
-            'adapter_door_requests',
+            door_requests_topic,
             self._door_request_callback,
             qos_profile=sub_state_qos_profile)
 
