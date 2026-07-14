@@ -614,6 +614,7 @@ class LciSemContext(LciContext):
 
     # Special extension for RMF. This value will be used in LCI RMF Adapter.
     _num_of_vdoor: int
+    _has_waypoint_in_area: bool
 
     def __init__(self, bldg_id: str, logger=None) -> None:
         super().__init__(DeviceType.SEM, logger)
@@ -629,8 +630,11 @@ class LciSemContext(LciContext):
         try:
             # Special extension for RMF. This value will be used in LCI RMF Adapter.
             self._num_of_vdoor = int(config.get('num_of_vdoor', 1))
+            self._has_waypoint_in_area = bool(
+                config.get('has_waypoint_in_area', True))
         except:
             self._num_of_vdoor = 1
+            self._has_waypoint_in_area = True
 
         ret = True
 

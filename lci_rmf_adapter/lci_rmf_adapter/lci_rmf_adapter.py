@@ -39,8 +39,8 @@ class RmfContext(ABC):
     _under_resetting: bool
 
     # To detect a failure of RMF (obsolete)
-    ## RMF will stop sending LiftRequest/DoorRequest soon after it recognized that LiftRequest/DoorRequest was accepted by LiftAdapter/DoorAdapter by observing LiftState/DoorRequest
-    ## It means the received time of LiftRequest/DoorRequest is not a correct cue of timeout.
+    # RMF will stop sending LiftRequest/DoorRequest soon after it recognized that LiftRequest/DoorRequest was accepted by LiftAdapter/DoorAdapter by observing LiftState/DoorRequest
+    # It means the received time of LiftRequest/DoorRequest is not a correct cue of timeout.
     # _last_recv_request_time: float
 
     def _log_info(self, message: str) -> None:
@@ -344,9 +344,13 @@ class SemAgentState(Enum):
             case _:
                 return self
 
-    def close_requested(self) -> "SemAgentState":
+    def close_requested(self, has_waypoint_in_area: bool) -> "SemAgentState":
         match self:
             case SemAgentState.WAIT_FOR_1st_VDOOR_CLOSE:
+                if not has_waypoint_in_area:
+                    # If no waypoint in the area, DoorRequest.DOOR_CLOSE for the door means release the area
+                    return SemAgentState.initial_state()
+
                 return SemAgentState.WAIT_FOR_2nd_VDOOR_OPEN
             case SemAgentState.WAIT_FOR_2nd_VDOOR_CLOSE:
                 return SemAgentState.initial_state()
@@ -361,11 +365,15 @@ class RmfSemContext(RmfContext):
     _target_vdoor_id: int
     _sem_vdoor_state: SemAgentState
 
+    _has_waypoint_in_area: bool
+
     def __init__(self, lci_context: lci_client.LciSemContext, logger=None) -> None:
         super().__init__(lci_context, logger)
         self._num_of_vdoor = lci_context._num_of_vdoor
         self._target_vdoor_id = 0
         self._sem_vdoor_state = SemAgentState.initial_state()
+
+        self._has_waypoint_in_area = lci_context._has_waypoint_in_area
 
     def reset(self) -> None:
         with self._lock:
@@ -416,7 +424,8 @@ class RmfSemContext(RmfContext):
     def close_request_received(self, target_vdoor_id: int) -> bool:
         with self._lock:
             if self._sem_vdoor_state.is_wait_for_close_request() and self._target_vdoor_id == target_vdoor_id:
-                self._sem_vdoor_state = self._sem_vdoor_state.close_requested()
+                self._sem_vdoor_state = self._sem_vdoor_state.close_requested(
+                    self._has_waypoint_in_area)
                 self._target_vdoor_id = 0
                 return True
         return False
@@ -648,8 +657,8 @@ class LciRmfAdapter(Node):
                 rl_context.put_request(
                     self._sync_elevator_status, (rl_context,))
 
-            ## RMF will stop sending LiftRequest soon after it recognized that LiftRequest was accepted by LiftAdapter by observing LiftState
-            ## It means the received time of LiftRequest is not a correct cue of timeout.
+            # RMF will stop sending LiftRequest soon after it recognized that LiftRequest was accepted by LiftAdapter by observing LiftState
+            # It means the received time of LiftRequest is not a correct cue of timeout.
             # if rl_context._lci_context.is_registered() and rl_context._last_recv_request_time + 10.0 < time.time():
             #     # RMF may be in hang. Timeout
             #     rl_context._log_error(
@@ -662,8 +671,8 @@ class LciRmfAdapter(Node):
                 rd_context.put_request(
                     self._sync_door_status, (rd_context,))
 
-            ## RMF will stop sending DoorRequest soon after it recognized that DoorRequest was accepted by DoorAdapter by observing DoorState
-            ## It means the received time of DoorRequest is not a correct cue of timeout.
+            # RMF will stop sending DoorRequest soon after it recognized that DoorRequest was accepted by DoorAdapter by observing DoorState
+            # It means the received time of DoorRequest is not a correct cue of timeout.
             # if rd_context._lci_context.is_registered() and rd_context._last_recv_request_time + 10.0 < time.time():
             #     # RMF may be in hang. Timeout
             #     rd_context._log_error(
@@ -676,8 +685,8 @@ class LciRmfAdapter(Node):
                 rs_context.put_request(
                     self._sync_sem_status, (rs_context,))
 
-            ## RMF will stop sending DoorRequest soon after it recognized that DoorRequest was accepted by DoorAdapter by observing DoorState
-            ## It means the received time of DoorRequest is not a correct cue of timeout.
+            # RMF will stop sending DoorRequest soon after it recognized that DoorRequest was accepted by DoorAdapter by observing DoorState
+            # It means the received time of DoorRequest is not a correct cue of timeout.
             # if rs_context._lci_context.is_registered() and (rs_context._sem_vdoor_state.need_check_request_timeout() and
             #                                                 rs_context._last_recv_request_time + 10.0 < time.time()):
             #     # RMF may be in hang. Timeout
