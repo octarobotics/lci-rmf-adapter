@@ -38,8 +38,10 @@ class RmfContext(ABC):
     # Flas to surpress RequestElevatorStatus or RequestDoorStatus when resetting.
     _under_resetting: bool
 
-    # To detect a failure of RMF
-    _last_recv_request_time: float
+    # To detect a failure of RMF (obsolete)
+    ## RMF will stop sending LiftRequest/DoorRequest soon after it recognized that LiftRequest/DoorRequest was accepted by LiftAdapter/DoorAdapter by observing LiftState/DoorRequest
+    ## It means the received time of LiftRequest/DoorRequest is not a correct cue of timeout.
+    # _last_recv_request_time: float
 
     def _log_info(self, message: str) -> None:
         self._logger.info(
@@ -72,7 +74,7 @@ class RmfContext(ABC):
 
         self._under_resetting = False
 
-        self._last_recv_request_time = 0
+        # self._last_recv_request_time = 0
 
     def _request_worker(self) -> None:
         while True:
@@ -101,7 +103,7 @@ class RmfContext(ABC):
         with self._lock:
             self._occupant_id = ''
             self._under_resetting = False
-            self._last_recv_request_time = 0
+            # self._last_recv_request_time = 0
 
     def get_occupant(self) -> str:
         return self._occupant_id
@@ -646,11 +648,13 @@ class LciRmfAdapter(Node):
                 rl_context.put_request(
                     self._sync_elevator_status, (rl_context,))
 
-            if rl_context._lci_context.is_registered() and rl_context._last_recv_request_time + 10.0 < time.time():
-                # RMF may be in hang. Timeout
-                rl_context._log_error(
-                    f'[lra, lift_req timeout] {rl_context.get_occupant()}')
-                self.reset_lift(rl_context)
+            ## RMF will stop sending LiftRequest soon after it recognized that LiftRequest was accepted by LiftAdapter by observing LiftState
+            ## It means the received time of LiftRequest is not a correct cue of timeout.
+            # if rl_context._lci_context.is_registered() and rl_context._last_recv_request_time + 10.0 < time.time():
+            #     # RMF may be in hang. Timeout
+            #     rl_context._log_error(
+            #         f'[lra, lift_req timeout] {rl_context.get_occupant()}')
+            #     self.reset_lift(rl_context)
 
         for rd_context in self._door_context_dict.values():
             if (rd_context._lci_context.is_registered() and not rd_context._under_resetting and
@@ -658,11 +662,13 @@ class LciRmfAdapter(Node):
                 rd_context.put_request(
                     self._sync_door_status, (rd_context,))
 
-            if rd_context._lci_context.is_registered() and rd_context._last_recv_request_time + 10.0 < time.time():
-                # RMF may be in hang. Timeout
-                rd_context._log_error(
-                    f'[lra, door_req timeout] {rd_context.get_occupant()}')
-                self.reset_door(rd_context)
+            ## RMF will stop sending DoorRequest soon after it recognized that DoorRequest was accepted by DoorAdapter by observing DoorState
+            ## It means the received time of DoorRequest is not a correct cue of timeout.
+            # if rd_context._lci_context.is_registered() and rd_context._last_recv_request_time + 10.0 < time.time():
+            #     # RMF may be in hang. Timeout
+            #     rd_context._log_error(
+            #         f'[lra, door_req timeout] {rd_context.get_occupant()}')
+            #     self.reset_door(rd_context)
 
         for rs_context in self._sem_context_dict.values():
             if (rs_context._lci_context.is_registered() and not rs_context._under_resetting and
@@ -670,12 +676,14 @@ class LciRmfAdapter(Node):
                 rs_context.put_request(
                     self._sync_sem_status, (rs_context,))
 
-            if rs_context._lci_context.is_registered() and (rs_context._sem_vdoor_state.need_check_request_timeout() and
-                                                            rs_context._last_recv_request_time + 10.0 < time.time()):
-                # RMF may be in hang. Timeout
-                rs_context._log_error(
-                    f'[lra, door_req (sem) timeout] {rs_context.get_occupant()}')
-                self.reset_sem(rs_context)
+            ## RMF will stop sending DoorRequest soon after it recognized that DoorRequest was accepted by DoorAdapter by observing DoorState
+            ## It means the received time of DoorRequest is not a correct cue of timeout.
+            # if rs_context._lci_context.is_registered() and (rs_context._sem_vdoor_state.need_check_request_timeout() and
+            #                                                 rs_context._last_recv_request_time + 10.0 < time.time()):
+            #     # RMF may be in hang. Timeout
+            #     rs_context._log_error(
+            #         f'[lra, door_req (sem) timeout] {rs_context.get_occupant()}')
+            #     self.reset_sem(rs_context)
 
     ####
     # Lift
@@ -748,7 +756,7 @@ class LciRmfAdapter(Node):
                             f'[lra, lift_req, invalid floor name] {tf} is not in lift')
                         return
 
-                rl_context._last_recv_request_time = time.time()
+                # rl_context._last_recv_request_time = time.time()
 
                 if rl_context.get_destination_floor() == msg.destination_floor:
                     # Because RMF sends same LiftRequest in 1 Hz, lci-rmf-adapter has to neglect those redundant requests by checking whether LiftRequest.destination_floor changes.
@@ -979,7 +987,7 @@ class LciRmfAdapter(Node):
                 self.reset_door(rd_context)
 
             case DoorMode.MODE_OPEN:
-                rd_context._last_recv_request_time = time.time()
+                # rd_context._last_recv_request_time = time.time()
 
                 if rd_context.is_door_open_asked():
                     # LCI do not need multiple OpenDoor command because LCI holds the request of OpenDoor as an internal state.
@@ -1105,7 +1113,7 @@ class LciRmfAdapter(Node):
                         return
 
             case DoorMode.MODE_OPEN:
-                rs_context._last_recv_request_time = time.time()
+                # rs_context._last_recv_request_time = time.time()
 
                 if rs_context.open_request_received(vdoor_id):
                     rs_context._log_info(
