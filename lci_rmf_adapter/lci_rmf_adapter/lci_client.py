@@ -1198,7 +1198,7 @@ if __name__ == '__main__':
     lci_client.start()
     time.sleep(2)
 
-    res = lci_client.do_registration(context)
+    res = lci_client.do_registration_elevator(context)
     lci_client._logger.debug(res)
     time.sleep(1)
 
