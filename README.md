@@ -77,7 +77,7 @@ The directional doors are marked with `lci_door_type: flap` in the config files 
 ## For Alarms
 LCI supports multiple source of fire alarms for fire compartmentation. However, RMF does not provide a standard method to separate sources. Then, LCI RMF Adapter discards the source information and publish a simple `Bool` to `/fire_alarm_trigger`.
 
-Altough LCI also support seismic alarms in the same manner as fire alarms, the current LCI RMF Adapter does not forward the seismic alarms because there is no standard method in RMF.
+Although LCI also support seismic alarms in the same manner as fire alarms, the current LCI RMF Adapter does not forward the seismic alarms because there is no standard method in RMF.
 
 LCI RMF Adapter never publish `false` to `/fire_alarm_trigger`, because RMF would resume tasks when `false` was received via `/fire_alarm_trigger` even after emergency situations.
 
