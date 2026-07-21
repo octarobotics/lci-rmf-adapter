@@ -133,10 +133,6 @@ If an exclusive access area does not contain a waypoint, DoorRequest.`MODE_CLOSE
 
 To use this method, the virtual door must be configured to block only the lane from the entrance to the exclusive access area and set `has_waypoint_in_area` of the corresponding resource in `sems` field to `False` of the configuration file (e.g. [server_config_simulator.yaml](lci_config/server_config_simulator.yaml)). This method is useful for reducing the number of waypoints and improving travel time.
 
-
-To use this method, the virtual door shall be configured to block only the lane entering the exclusive access area, and `has_waypoint_in_area` for the corresponding resource in the `sems` field must be set to `False` in the configuration file (e.g., server_config_simulator.yaml). This method is useful for reducing the number of waypoints and improving travel efficiency.
-
-
 ### Procedure
 When a robot attempts to pass through a virtual door, LCI RMF Adapter acquires the access right to the corresponding area via LCI Sem.
 
