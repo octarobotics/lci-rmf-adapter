@@ -92,7 +92,12 @@ This feature shall be used together with the `Mutex Group` functions of RMF in a
 
 - Configure the `Mutex Group` area to be larger than the exclusive access area in order to avoid race conditions between RMF and other systems.
 - Configure virtual doors at the boundary between the exclusive access area and the surrounding area.
+<p align="center">
+<img width="50%" alt="mutexgroup-sem-vdoors" src="assets/mutexgroup-sem-vdoors.png"/>
+</p>
+
 - Ensure that only one requester is allowed to send MODE_OPEN DoorRequests to the virtual doors at a time.
+- Clarify whether a waypoint should be placed inside the exclusive access area.
 
 > [!NOTE]
 > If you are able to customize or replace the `mutex_group_supervisor` Node of RMF, it is possible to integrate LCI Sem directly.
@@ -105,6 +110,32 @@ The name of an exclusive access area is of the format `/lci/<bldg_id>/sem/<resou
 Then, the `door_name` of the virtual door shall be  `/lci/<bldg_id>/sem/<resource_id>/<virtual_door_id>`.
 
 This `<virtual_door_id>` shall be a positive integer string no more than the number defined as `num_of_vdoor` in the configuration file (e.g. [server_config_simulator.yaml](lci_config/server_config_simulator.yaml)). You may freely adjust `num_of_vdoor` in the configuration file according to the number of virtual doors required for your system configuration. This parameter is local to LCI RMF Adapter and does not affect the behaviour of the LCI system itself.
+
+### Waypoint inside the exclusive access area
+If an exclusive access area contains a waypoint, at the waypint, DoorRequest.`MODE_CLOSE` is sent to the first virtual door (the entrance), while DoorRequest.`MODE_OPEN` is sent to the second virtual door (the exit).
+<p align="center">
+<img width="50%" alt="mutexgroup-sem-vdoors" src="assets/mutexgroup-sem-vdoors-waypoint-in-area.png"/>
+</p>
+
+This method is also applicable to a junction.
+<p align="center">
+<img width="50%" alt="mutexgroup-sem-vdoors" src="assets/mutexgroup-sem-vdoors-waypoint-in-area-t-junction.png"/>
+</p>
+
+By default, the virtual doors associated with a single exclusive access area are configured to support this method. The resource of LCI Sem will be released when DoorRequest.`MODE_CLOSE` is sent to the second virtual door (the exit).
+
+
+### No waypoint inside the exclusive access area
+If an exclusive access area does not contain a waypoint, DoorRequest.`MODE_CLOSE` is sent to the first virtual door (the entrance) when the robot reaches the first waypoint after exiting the exclusive access area. Then, the resource of LCI Sem will be released.
+<p align="center">
+<img width="50%" alt="mutexgroup-sem-vdoors" src="assets/mutexgroup-sem-vdoors-no-waypoint-in-area.png"/>
+</p>
+
+To use this method, the virtual door must be configured to block only the lane from the entrance to the exclusive access area and set `has_waypoint_in_area` of the corresponding resource in `sems` field to `False` of the configuration file (e.g. [server_config_simulator.yaml](lci_config/server_config_simulator.yaml)). This method is useful for reducing the number of waypoints and improving travel time.
+
+
+To use this method, the virtual door shall be configured to block only the lane entering the exclusive access area, and `has_waypoint_in_area` for the corresponding resource in the `sems` field must be set to `False` in the configuration file (e.g., server_config_simulator.yaml). This method is useful for reducing the number of waypoints and improving travel efficiency.
+
 
 ### Procedure
 When a robot attempts to pass through a virtual door, LCI RMF Adapter acquires the access right to the corresponding area via LCI Sem.

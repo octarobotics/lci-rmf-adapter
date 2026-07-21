@@ -111,11 +111,13 @@ sems:
     lci_timeout_sec: 60
     lci_max_timeout_sec: 600
     num_of_vdoor: 3
+    # has_waypoint_in_area: True
   - lci_resource_id: "area-2"
     lci_resource_type: "binary"
     lci_timeout_sec: 60
     lci_max_timeout_sec: 600
-    num_of_vdoor: 1
+    num_of_vdoor: 2
+    has_waypoint_in_area: False
 
 # # Extension for RMF from floor_name alias to LCI floor_name
 # floor_name_aliases:
