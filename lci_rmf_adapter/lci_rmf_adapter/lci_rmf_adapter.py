@@ -120,7 +120,7 @@ class RmfContext(ABC):
         LciContext does not automatically recover to connected status and emergency status unless sending a message.
         To induce RMF to send LiftRequest or DoorRequest, actual MODE_OFFLINE and MODE_EMERGENCY are to be hidden by MODE_AGV or MODE_CLOSED after enough duration.
         """
-        current_time = time.time()
+        current_time = time.monotonic()
         return ((not self._lci_context.is_connected() and self._lci_context._last_disconnected_timestamp + deadtime < current_time) or
                 (not self._lci_context.is_available() and self._lci_context._last_unavailable_timestamp + deadtime < current_time))
 
@@ -175,7 +175,7 @@ class RmfLiftContext(RmfContext):
             lift_state.door_state = LiftState.DOOR_CLOSED
             return lift_state
 
-        if time.time() < self._lci_context._last_get_unregisterd_timestamp + 10.0:
+        if time.monotonic() < self._lci_context._last_get_unregisterd_timestamp + 10.0:
             """
             Lift and LCI require a deadtime for resetting sequence.
             To surpress LiftRequest until the end of deadtime 10s, MODE_UNKNOWN is used instead of MODE_AGV.
@@ -270,7 +270,7 @@ class RmfDoorContext(RmfContext):
             door_state.current_mode.value = DoorMode.MODE_UNKNOWN
             return door_state
 
-        if time.time() < self._lci_context._last_get_unregisterd_timestamp + 10.0:
+        if time.monotonic() < self._lci_context._last_get_unregisterd_timestamp + 10.0:
             """
             Door and LCI require a deadtime for resetting sequence.
             To surpress DoorRequest until the end of deadtime 10s, MODE_UNKNOWN is used instead of MODE_CLOSED.

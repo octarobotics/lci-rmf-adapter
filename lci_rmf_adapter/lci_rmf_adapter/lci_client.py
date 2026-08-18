@@ -102,9 +102,12 @@ class LciResponseEvent:
 
     def wait(self, timeout=None) -> dict | None:
         with self._cond:
-            signaled = (self.responded_payload is not None)
-            if not signaled:
-                self._cond.wait(timeout)
+            # wait_for() to avoid spurious wakeup
+            self._cond.wait_for(
+                lambda: self.responded_payload is not None,
+                timeout=timeout
+            )
+
             return self.responded_payload
 
 
@@ -283,7 +286,7 @@ class LciContext(ABC):
             if not on_off:
                 # If disconnected, synchronization with LCI is disrupted.
                 # Reset and wait for recovery.
-                self._last_disconnected_timestamp = time.time()
+                self._last_disconnected_timestamp = time.monotonic()
                 self.set_available(False)
 
             self._is_connected = on_off
@@ -291,7 +294,7 @@ class LciContext(ABC):
     def set_available(self, on_off: bool) -> None:
         with self._context_lock:
             if not on_off:
-                self._last_unavailable_timestamp = time.time()
+                self._last_unavailable_timestamp = time.monotonic()
                 self.set_registered(False)
 
             self._is_available = on_off
@@ -299,7 +302,7 @@ class LciContext(ABC):
     def set_registered(self, on_off: bool) -> None:
         with self._context_lock:
             if self._is_registered and not on_off:  # falling edge
-                self._last_get_unregisterd_timestamp = time.time()
+                self._last_get_unregisterd_timestamp = time.monotonic()
 
                 self._reset()
 
@@ -585,7 +588,7 @@ class LciAlarmContext:
             # unexpected value
             return
 
-        self._last_received_timestamp = time.time()
+        self._last_received_timestamp = time.monotonic()
 
         if dry_run is True:
             self._logger.info(
@@ -968,11 +971,11 @@ class LciClient:
                 return None
 
         # Wait for completion of publish()
-        start_time = time.time()
+        start_time = time.monotonic()
         while True:
-            if start_time + 5.0 < time.time():
+            if start_time + 5.0 < time.monotonic():
                 # When publish() does not finish for 5 s, it should be considered disconnected.
-                self._logger.error(f'[{context._topic_prefix}]   [mq_send, timeout ({time.time()-start_time:.03f})] {api}, {payload}')  # noqa
+                self._logger.error(f'[{context._topic_prefix}]   [mq_send, timeout ({time.monotonic()-start_time:.03f})] {api}, {payload}')  # noqa
                 context.remove_response_event(api, timestamp)
                 try:
                     self._mqtt_client.disconnect()
@@ -991,7 +994,7 @@ class LciClient:
 
                 if pub_info.is_published():
                     # Elapsed time between PUB and PUBACK
-                    self._logger.info(f'[{context._topic_prefix}]   [mq_send ({time.time()-start_time:.03f})] {api}, {payload}')  # noqa
+                    self._logger.info(f'[{context._topic_prefix}]   [mq_send ({time.monotonic()-start_time:.03f})] {api}, {payload}')  # noqa
                     break
 
             except Exception:
@@ -1002,13 +1005,13 @@ class LciClient:
             return None
 
         # Wait for receiving response from LCI
-        start_time = time.time()
+        start_time = time.monotonic()
         res_payload = response_event.wait(timeout_sec)
         if res_payload is not None:
             # Elapsed time between LCI's request and response
-            self._logger.info(f'[{context._topic_prefix}]   [mq_recv ({time.time()-start_time:.03f})] {api}, {res_payload}')  # noqa
+            self._logger.info(f'[{context._topic_prefix}]   [mq_recv ({time.monotonic()-start_time:.03f})] {api}, {res_payload}')  # noqa
         else:
-            self._logger.error(f'[{context._topic_prefix}]   [mq_recv, timeout ({time.time()-start_time:.03f})] {api}')  # noqa
+            self._logger.error(f'[{context._topic_prefix}]   [mq_recv, timeout ({time.monotonic()-start_time:.03f})] {api}')  # noqa
         return res_payload
 
     def _sync_execute_with_retry(self, context: LciContext, api: str, payload: dict,
